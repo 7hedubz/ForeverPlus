@@ -1,8 +1,8 @@
-ForeverPlus 1.1.4 — WoW Forever dungeon timer and run journal
+ForeverPlus 1.2.0 — WoW Forever dungeon timer and run journal
 ============================================================
 Author: DoHeal. Interface16001 / Camelot.
 Install in _forever_/Interface/AddOns/ForeverPlus.
-From 1.1.0-1.1.3: /reload. New install or upgrade from before1.1.0: relaunch.
+From 1.1.0-1.1.4: /reload. New install or upgrade from before1.1.0: relaunch.
 
 DUNGEON JOURNAL
 /fplus opens dungeon -> individual run -> roster, damage/healing, deaths.
@@ -24,13 +24,36 @@ Only native notifications add forces: scans/CLEU cannot double-count a kill.
 Existing progress is preserved on upgrade; new ledger/exclusions persist on
 reload. Earlier rejected session notifications are not guessed/backfilled.
 
+RUN LIFETIME / ABANDON
+An active run never resets until explicitly abandoned or completed. Death,
+release, corpse runs, resurrection, zone changes, another dungeon and /reload
+(including outside the dungeon) preserve the original timer and run data.
+There is no automatic 12-hour expiration. A different dungeon cannot replace
+an unfinished attempt or add objective credit to it. /fplus reset is still an
+intentional manual restart, never an automatic action.
+
+Click HUD Abandon, minimap -> Abandon run, or /fplus abandon. Solo: Yes/No
+confirmation. Group: discover compatible peers for about 3 seconds, then all
+discovered addon voters must agree within 20 seconds. No/timeout/run or roster
+change/local send failure keeps the attempt active. No responders after an
+accepted discovery offers explicitly LOCAL-ONLY confirmation, not proof that
+nobody else uses the addon. Older/non-addon members cannot vote. Rejected
+transport never silently falls back to local abandon. Voting is best-effort,
+not atomic: lost packets can make clients disagree despite API acceptance.
+Reload cancels in-flight voting but preserves the active run. The vote panel
+appears even with the timer HUD hidden. Explicit abandon archives once and
+suppresses automatic restarts while still inside, including after reload.
+
 BOSSES AND TIMER
 One hour; +3 through36:00, +2 through48:00, +1 through60:00. Overtime continues.
 Auto-complete requires all configured bosses plus100% non-boss forces.
 Unknown/empty boss rosters require /fplus complete. Exact names/aliases and
 verified death can identify bosses with restricted GUIDs; disappearance alone
 never counts. Each new required boss posts remaining time/overtime, current
-forces after boss deduction, and boss progress to PARTY chat. No solo/raid/demo
+forces after boss deduction, and boss progress to PARTY/INSTANCE_CHAT as
+appropriate. Reports use plain-text separators, not invalid pipe escapes.
+/fplus debug shows chat attempts/errors; API acceptance is not proof of
+delivery. No solo/raid/demo
 reports; no duplicate boss-event reports. No cross-client announcer election.
 
 STATS AND DEATHS
@@ -56,11 +79,11 @@ COMMANDS
 /fplus lock            toggle timer dragging
 /fplus reset           archive reset attempt, restart timer/objectives/ledger
 /fplus complete        force-complete real run
-/fplus abandon         archive abandoned attempt without completion PB
+/fplus abandon         explicit confirmation / compatible-party abandon vote
 /fplus times           print personal bests and toggle journal
 /fplus share           legacy personal-best sharing
 /fplus demo or /demo   unsaved practice timer
-Minimap left-click: timer. Right-click: history / sync / lock / close menu.
+Minimap left-click: timer. Right-click: history / sync / lock / abandon menu.
 
 TESTS
 python3 tests/run.py requires Python3, LuaJIT, luac. Mocked-API tests do not

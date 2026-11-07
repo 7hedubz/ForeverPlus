@@ -13,6 +13,7 @@ methods.SetHeight=function(s,h) s.height=h end
 methods.GetWidth=function(s) return s.width end
 methods.SetScript=function(s,k,v) s.scripts[k]=v end
 methods.SetText=function(s,v) s.text=v end
+methods.SetEnabled=function(s,v) s.enabled=v end
 methods.Show=function(s) s.shown=true end
 methods.Hide=function(s) s.shown=false end
 methods.IsShown=function(s) return s.shown end
@@ -121,3 +122,37 @@ assert(loadfile('UI.lua'))('ForeverPlus',ns);ns.UI.Init();ns.UI.RefreshBoard()
 assert(ForeverPlusBoard.sortButton.text=='Alphabetical')
 db.dungeonSort='bad';ns.UI.RefreshBoard();assert(db.dungeonSort=='alpha')
 print('PASS alphabetical/level toggle, all catalog ranges, ties, selection, unknowns and saved preference')
+-- Abandon is an explicit confirmed/voted action, never a direct UI reset.
+local requests, casts, direct = 0, {}, 0
+local vote
+ns.AbandonRun=function() direct=direct+1 end
+ns.Vote={Request=function() requests=requests+1;vote={id='local1',phase='confirm',text='Abandon this local run only?',canVote=true} end,
+ Get=function() return vote end,
+ Cast=function(yes) casts[#casts+1]=yes;vote={id='local1',phase=yes and 'passed' or 'cancelled',text=yes and 'Abandoned.' or 'Cancelled.',canVote=false} end}
+run={key='rfc',name='Ragefire Chasm',active=true,deaths=0,kills=2,dungeon=ns.DUNGEONS.rfc,bossDown={}}
+ns.UI.Show();ns.UI.Tick()
+assert(ForeverPlusFrame.abandonButton,'HUD lacks abandon button')
+assert(ForeverPlusFrame.height>=184,'abandon band overlaps old HUD rows')
+ForeverPlusFrame.abandonButton.scripts.OnClick()
+assert(requests==1 and direct==0,'abandon bypassed voting/confirmation')
+assert(ForeverPlusAbandonVote:IsShown(),'local confirmation not shown')
+assert(ForeverPlusAbandonVote.message.text:find('local',1,true))
+ForeverPlusAbandonVote.noButton.scripts.OnClick()
+assert(casts[1]==false and direct==0,'No must route to vote module')
+ForeverPlusAbandonVote.closeButton.scripts.OnClick();ns.UI.Tick()
+assert(not ForeverPlusAbandonVote:IsShown(),'dismissed terminal vote reopened')
+ns.UI.HideNow();vote={id='remote2',phase='vote',text='Friend asks to abandon. Yes 1/2.',canVote=true,deadline=120}
+ns.UI.Tick()
+assert(ForeverPlusAbandonVote:IsShown(),'remote vote hidden with HUD')
+assert(ForeverPlusAbandonVote.yesButton.shown and ForeverPlusAbandonVote.noButton.shown)
+ForeverPlusAbandonVote.yesButton.scripts.OnClick()
+assert(casts[2]==true and direct==0,'Yes must route to vote module')
+run.complete=true;run.active=false
+local beforeRequests=requests
+ns.UI.Show();ns.UI.Tick();ForeverPlusFrame.abandonButton.scripts.OnClick()
+assert(requests==beforeRequests,'completed run permitted abandon request')
+run=nil;ns.UI.Tick()
+assert(not ForeverPlusFrame.abandonButton.enabled,'idle abandon button enabled')
+ns.UI.ToggleMinimapMenu(ForeverPlusMinimapButton)
+assert(ForeverPlusMinimapMenu.abandonButton,'minimap lacks abandon action')
+print('PASS explicit abandon routing, confirmation/No/Yes, hidden-HUD votes, terminal dismissal, inactive guards')

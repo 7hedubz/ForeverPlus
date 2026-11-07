@@ -48,7 +48,7 @@ function UI.Init()
     if frame then return end
 
     frame = CreateFrame("Frame", "ForeverPlusFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
-    frame:SetSize(300, 150)
+    frame:SetSize(300, 184)
     frame:SetPoint("TOP", UIParent, "TOP", 0, -80)
     frame:SetMovable(true)
     frame:EnableMouse(true)
@@ -134,7 +134,7 @@ function UI.Init()
     local barW, barH = 280, 8
     local barBack = frame:CreateTexture(nil, "ARTWORK")
     barBack:SetColorTexture(0.12, 0.10, 0.14, 1)
-    barBack:SetPoint("BOTTOMLEFT", 10, 10)
+    barBack:SetPoint("BOTTOMLEFT", 10, 44)
     barBack:SetSize(barW, barH)
     frame.barBack = barBack
 
@@ -164,6 +164,18 @@ function UI.Init()
         local font = ticks:GetFont()
         if font then ticks:SetFont(font, 10) end
     end
+
+    local abandon = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    abandon:SetSize(106, 24)
+    abandon:SetPoint("BOTTOMLEFT", 10, 10)
+    abandon:SetText("Abandon")
+    abandon:SetScript("OnClick", function() UI.RequestAbandon() end)
+    abandon:SetEnabled(false)
+    frame.abandonButton = abandon
+    local persistence = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    persistence:SetPoint("LEFT", abandon, "RIGHT", 10, 0)
+    persistence:SetWidth(164)
+    persistence:SetText("Continues through death\nand zone changes")
 
     frame:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
@@ -227,6 +239,70 @@ end
 local function SyncRuns()
     if ns.Sync and ns.Sync.Request then ns.Sync.Request("manual") end
     UI.RefreshBoard()
+end
+
+-- This panel is independent of HUD visibility, so incoming votes remain visible.
+local dismissedVote
+function UI.RequestAbandon()
+    local r = ns.GetRun()
+    if not r or not r.active or r.complete or r.practice then return end
+    dismissedVote = nil
+    if ns.Vote and ns.Vote.Request then ns.Vote.Request()
+    elseif ns.Print then ns.Print("Abandon voting is unavailable. Reload the updated addon.") end
+    UI.RefreshVote()
+end
+
+function UI.RefreshVote()
+    local state = ns.Vote and ns.Vote.Get and ns.Vote.Get()
+    local panel = UI.votePanel
+    if not state then if panel then panel:Hide() end; return end
+    local terminal = state.phase == "passed" or state.phase == "failed" or state.phase == "cancelled"
+    local key = tostring(state.phase) .. ":" .. tostring(state.id or state.deadline or state.text)
+    if terminal and dismissedVote == key then if panel then panel:Hide() end; return end
+    if not terminal then dismissedVote = nil end
+    if not panel then
+        panel = CreateFrame("Frame", "ForeverPlusAbandonVote", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+        panel:SetSize(340, 194)
+        panel:SetPoint("CENTER", UIParent, "CENTER", 0, -130)
+        panel:SetFrameStrata("DIALOG")
+        panel:SetClampedToScreen(true)
+        MakeBackdrop(panel, 0.04, 0.03, 0.07, 0.98)
+        panel.title = Text(panel, 12, -12, 316, "GameFontNormal")
+        panel.title:SetText("Abandon run?")
+        panel.message = Text(panel, 12, -38, 316)
+        panel.message:SetHeight(100)
+        panel.message:SetJustifyV("TOP")
+        local function button(text, x, fn)
+            local b = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+            b:SetSize(146, 26); b:SetPoint("BOTTOMLEFT", x, 12)
+            b:SetText(text); b:SetScript("OnClick", fn)
+            return b
+        end
+        panel.yesButton = button("Yes, abandon", 12, function()
+            if ns.Vote and ns.Vote.Cast then ns.Vote.Cast(true) end
+            UI.RefreshVote()
+        end)
+        panel.noButton = button("No, continue", 182, function()
+            if ns.Vote and ns.Vote.Cast then ns.Vote.Cast(false) end
+            UI.RefreshVote()
+        end)
+        panel.closeButton = button("Close", 98, function()
+            dismissedVote = panel.stateKey; panel:Hide()
+        end)
+        UI.votePanel = panel
+    end
+    panel.stateKey = key
+    local text = SafeText(state.text)
+    if type(state.deadline) == "number" and not terminal then
+        text = text .. "\n" .. math.max(0, math.ceil(state.deadline - GetTime())) .. "s remaining"
+    end
+    panel.message:SetText(text)
+    if state.canVote then
+        panel.yesButton:Show(); panel.noButton:Show()
+        panel.yesButton:SetEnabled(true); panel.noButton:SetEnabled(true)
+    else panel.yesButton:Hide(); panel.noButton:Hide() end
+    if terminal then panel.closeButton:Show() else panel.closeButton:Hide() end
+    panel:Show()
 end
 
 function UI.BuildBoard()
@@ -471,7 +547,7 @@ function UI.ToggleMinimapMenu(anchor)
     local menu = UI.minimapMenu
     if not menu then
         menu = CreateFrame("Frame", "ForeverPlusMinimapMenu", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
-        menu:SetSize(190, 142)
+        menu:SetSize(190, 172)
         menu:SetFrameStrata("TOOLTIP")
         menu:SetClampedToScreen(true)
         MakeBackdrop(menu, 0.03, 0.03, 0.06, 0.99)
@@ -486,7 +562,8 @@ function UI.ToggleMinimapMenu(anchor)
         item("Dungeon history", 1, function() if not board:IsShown() then UI.ToggleBoard() end end)
         menu.syncButton = item("Sync runs", 2, SyncRuns)
         menu.lockButton = item("Lock / unlock timer", 3, function() DB().locked = not DB().locked end)
-        item("Close", 4, function() end)
+        menu.abandonButton = item("Abandon run...", 4, function() UI.RequestAbandon() end)
+        item("Close", 5, function() end)
         menu:Hide()
         UI.minimapMenu = menu
     end
@@ -571,6 +648,11 @@ function UI.OnComplete(run)
 end
 
 function UI.Tick()
+    UI.RefreshVote()
+    if frame then
+        local current = ns.GetRun()
+        frame.abandonButton:SetEnabled(current ~= nil and current.active == true and not current.complete and not current.practice)
+    end
     if board and board:IsShown() and ns.Sync and ns.Sync.Status then
         board.syncStatus:SetText(SafeText(ns.Sync.Status()))
     end

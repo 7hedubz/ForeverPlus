@@ -43,7 +43,8 @@ UnitIsPlayer=function(u) return u=='player' or u=='party1' end
 UnitCanAttack=function() return false end
 GetNumGroupMembers=function() return 2 end
 GetNumSubgroupMembers=function() return 1 end
-IsInGroup=function() return true end
+LE_PARTY_CATEGORY_INSTANCE=2
+IsInGroup=function(category) return category==nil end
 IsInInstance=function() return kind=='party' end
 IsInRaid=function() return false end
 IsInGuild=function() return false end
@@ -148,7 +149,7 @@ fire('PARTY_KILL','opaque-attacker','opaque-target')
 assert(ns.ForcesPercent(ns.GetRun())==2,'opaque native kill notification did not count')
 fire('UNIT_FLAGS','target');assert(ns.GetRun().kills==1,'duplicate corpse counted')
 local reports={}
-C_ChatInfo.SendChatMessage=function(msg,ch) reports[#reports+1]={msg=msg,ch=ch} end
+C_ChatInfo.SendChatMessage=function(msg,ch) assert(not msg:find('|',1,true),'Invalid escape code in chat message');assert(#msg<=255);reports[#reports+1]={msg=msg,ch=ch} end
 fire('PARTY_KILL','opaque-attacker','opaque-target')
 fire('BOSS_KILL',0,'Ghamoo-ra');fire('ENCOUNTER_END',0,'Ghamoo-ra',1,5,1)
 assert(#reports==1 and reports[1].ch=='PARTY' and reports[1].msg:find('Forces 2%',1,true),'boss party report missing or duplicated')
@@ -201,3 +202,57 @@ assert(archivedDeaths==2,'party deaths were not archived')
 friendDead=false;fire('UNIT_FLAGS','party1');friendDead=true;fire('UNIT_HEALTH','party1')
 assert(ns.History.TotalDeaths(partyRun)==2,'completed party deaths changed')
 print('PASS closed-CLEU teammate deaths, party HUD total, resurrection, archival and completed freeze')
+-- A death/release/world transfer must never end the active attempt.
+friendDead=false
+kind,dungeonName,instanceID='party','Ragefire Chasm',389
+fire('PLAYER_ENTERING_WORLD');advance(1)
+local persistent=ns.GetRun()
+assert(persistent.active and persistent.key=='rfc')
+fire('PARTY_KILL','opaque-attacker','opaque-target');advance(35)
+local originalStart=persistent.startUnix
+local originalHistory=persistent.history.id
+local beforeDeaths=ns.History.TotalDeaths(persistent)
+local previousDead=UnitIsDeadOrGhost
+local playerDead=true
+UnitIsDeadOrGhost=function(u) if u=='player' then return playerDead end;return previousDead(u) end
+fire('PLAYER_DEAD');fire('UNIT_FLAGS','player')
+assert(ns.History.TotalDeaths(persistent)==beforeDeaths+1,'local death not counted exactly once')
+kind,dungeonName,instanceID='none','Graveyard',0
+fire('PLAYER_ENTERING_WORLD');advance(20)
+assert(ns.GetRun()==persistent and persistent.active,'release outside abandoned active run')
+assert(persistent.startUnix==originalStart and persistent.kills==1)
+playerDead=false;fire('PLAYER_ALIVE');fire('UNIT_FLAGS','player');fire('ZONE_CHANGED_NEW_AREA');advance(5)
+assert(ns.GetRun()==persistent,'outside resurrection restarted the attempt')
+-- Simulate a real reload: new Lua state namespace and handlers, same SavedVariables.
+frames,timers,tickers={},{},{}
+ns=loadAddon();fire('PLAYER_ENTERING_WORLD');advance(2)
+persistent=ns.GetRun()
+assert(persistent and persistent.active and persistent.key=='rfc','outside reload lost run')
+assert(persistent.startUnix==originalStart and persistent.kills==1,'reload lost start/forces')
+assert(persistent.history.id==originalHistory,'reload replaced history identity')
+assert(ns.Elapsed(persistent)>=60,'timer did not include death/corpse-run/reload time')
+assert(ns.History.TotalDeaths(persistent)==beforeDeaths+1,'reload lost/doubled death')
+kind,dungeonName,instanceID='party','The Deadmines',36
+fire('PLAYER_ENTERING_WORLD');advance(2)
+assert(ns.GetRun()==persistent and persistent.key=='rfc','different dungeon replaced unfinished run')
+fire('PARTY_KILL','opaque-attacker','opaque-target');fire('BOSS_KILL',0,'Edwin VanCleef')
+assert(persistent.kills==1,'wrong dungeon credited original run')
+kind,dungeonName,instanceID='party','Ragefire Chasm',389
+fire('PLAYER_ENTERING_WORLD');advance(2)
+assert(ns.GetRun()==persistent and persistent.startUnix==originalStart)
+fire('PARTY_KILL','opaque-attacker','opaque-target')
+assert(persistent.kills==2,'original dungeon stopped counting after return')
+ns.UI.Show();ns.UI.Tick()
+assert(ForeverPlusFrame.abandonButton,'real HUD abandon action absent')
+-- Explicit solo confirmation via the real comm module cannot end the run early.
+IsInGroup=function() return false end
+ForeverPlusFrame.abandonButton.scripts.OnClick()
+assert(ns.GetRun()==persistent and ns.Vote.Get().phase=='confirm')
+assert(ForeverPlusAbandonVote:IsShown())
+ForeverPlusAbandonVote.yesButton.scripts.OnClick()
+assert(not ns.GetRun() or not ns.GetRun().active,'confirmed abandon did not end run')
+fire('ZONE_CHANGED_NEW_AREA');advance(2)
+assert(not ns.GetRun() or not ns.GetRun().active,'abandon silently restarted inside instance')
+local abandoned=ns.History.List('rfc')
+assert(#abandoned==2 and abandoned[1].status=='abandoned','abandoned run not archived exactly once')
+print('PASS real death/release/resurrection/outside reload/wrong dungeon/reentry preservation and confirmed abandon')

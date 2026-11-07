@@ -8,7 +8,8 @@ local function boot(db)
  ForeverPlusDB=db or {}; SlashCmdList={}
  issecretvalue=function(v) return rawequal(v,secret) or rawequal(v,'private-creature-guid') end
  GetTime=function() return s.clock end; time=function() return s.unix end
- IsInGroup=function() return s.group==true end; IsInRaid=function() return s.raid==true end
+ LE_PARTY_CATEGORY_INSTANCE=nil;Enum=nil
+ IsInGroup=function(category) if category~=nil then return s.instanceGroup==true end return s.group==true end; IsInRaid=function() return s.raid==true end
  SendChatMessage=nil; C_ChatInfo=nil
  GetInstanceInfo=function() return s.name,s.kind,1,'Normal',5,0,false,s.id end
  GetRealZoneText=function() return s.name end; GetSubZoneText=function() return s.sub end; GetMinimapZoneText=function() return '' end
@@ -44,6 +45,25 @@ local function boot(db)
  return s,ns
 end
 local function test(name,fn) tests[#tests+1]={name,fn} end
+test('attempt generation changes on same-second resets and new attempts only',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);local generation=r.attemptGeneration
+ assert(type(generation)=='number','new run needs a local attempt generation')
+ eq(n.StartRun(n.DUNGEONS.rfc),r);eq(r.attemptGeneration,generation)
+ for i=1,2 do
+  s.clock=s.clock+0.1;SlashCmdList.FOREVERPLUS('reset')
+  eq(n.GetRun(),r);eq(r.startUnix,100000)
+  assert(r.attemptGeneration>generation,'same-second reset must advance attempt generation')
+  generation=r.attemptGeneration
+ end
+ n.AbandonRun('slash');r=n.StartRun(n.DUNGEONS.rfc)
+ assert(r.attemptGeneration>generation,'new attempt must advance generation')
+ local db=ForeverPlusDB;s,n=boot(db);s:entry();r=n.GetRun()
+ assert(type(r.attemptGeneration)=='number','resumed run needs a session-local generation')
+ generation=r.attemptGeneration;n.CheckZone();eq(r.attemptGeneration,generation)
+ SlashCmdList.FOREVERPLUS('reset');assert(r.attemptGeneration>generation)
+ s,n=boot();s.name='Scarlet Monastery';s.id=189;n.CheckZone();r=n.GetRun();generation=r.attemptGeneration
+ s.sub='Library';n.CheckZone();eq(r.key,'smlib');eq(r.attemptGeneration,generation)
+end)
 test('opaque native notifications count without GUID evidence',function()
  local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc)
  UnitGUID=function() error('native policy must not query GUID') end
@@ -72,11 +92,107 @@ test('completed sentinel survives reload until leave or explicit reset',function
  SlashCmdList.FOREVERPLUS('reset'); assert(n.GetRun().active)
  n.CompleteRun('test'); s.kind='none'; n.CheckZone(); s.kind='party'; n.CheckZone(); assert(n.GetRun().active)
 end)
-test('wing confirmation persists and different dungeon starts fresh',function()
+test('wing confirmation persists and different dungeon cannot replace active run',function()
  local s,n=boot(); s.name='Scarlet Monastery'; s.id=189; n.CheckZone(); local r=n.GetRun()
  n.OnCreatureDead(nil,3974,'Houndmaster Loksey','BOSS_KILL'); eq(r.key,'smlib'); eq(ForeverPlusDB.currentRun.key,'smlib')
  n.CheckZone(); eq(r.key,'smlib'); s,n=boot(ForeverPlusDB); s.name='Scarlet Monastery'; s.id=189; s:entry(); eq(n.GetRun().key,'smlib')
- r=n.GetRun(); s.name='The Deadmines'; s.id=36; n.CheckZone(); assert(n.GetRun()~=r); eq(n.GetRun().key,'dm'); eq(n.GetRun().kills,0)
+ r=n.GetRun(); s.name='The Deadmines'; s.id=36; n.CheckZone(); eq(n.GetRun(),r); eq(r.key,'smlib'); eq(n.CountBossesDown(r),1)
+end)
+test('active lifecycle survives death release ghost and every departure without archiving',function()
+ local s,n=boot();local archives=0
+ local r=n.StartRun(n.DUNGEONS.rfc);n.History={UnitState=function() end, Archive=function() archives=archives+1 end};s:kill(1);s:kill(2);s.event(nil,'BOSS_KILL',101,'Oggleflint')
+ local start=r.startUnix;local seen=r.bossDown;local excluded=r.excludedBossKeys
+ s.event(nil,'PLAYER_DEAD');s.event(nil,'PLAYER_ALIVE');s.event(nil,'PLAYER_UNGHOST')
+ for _,kind in ipairs({'none','raid','pvp','arena','scenario','party'}) do
+  s.kind=kind;s.clock=s.clock+10;n.CheckZone('ZONE_CHANGED_NEW_AREA')
+  eq(n.GetRun(),r);eq(ForeverPlusDB.currentRun.startUnix,start);eq(r.deaths,1)
+  eq(r.kills,1);eq(r.nativeCount,2);eq(r.bossDeductions,1);eq(r.bossDown,seen);eq(r.excludedBossKeys,excluded)
+ end
+ local api=GetInstanceInfo;GetInstanceInfo=function() error('transient') end;n.CheckZone();eq(n.GetRun(),r);GetInstanceInfo=api
+ s.id=36;s.name='The Deadmines';n.CheckZone();eq(n.StartRun(n.DUNGEONS.dm),r)
+ eq(r.key,'rfc');eq(n.Elapsed(r),60);eq(archives,0)
+end)
+test('ongoing reload resumes original dungeon and complete ledger anywhere without age expiry',function()
+ for _,where in ipairs({'outside','other','missing','original','unknown'}) do
+  local s,n=boot();if where=='unknown' then s.name='Uncatalogued';s.id=987 end
+  s.units.player={guid='Player-1',player=true,dead=false}
+  assert(loadfile(root..'History.lua'))('ForeverPlus',n)
+  local r=n.StartRun(n.ResolveDungeon());s:kill(1);s:kill(2);s.event(nil,'BOSS_KILL',101,'Oggleflint');s.units.player.dead=true;s.event(nil,'PLAYER_DEAD')
+  r.history.coverage='partial';local history=r.history;local key=r.key;local confidence=r.confidence
+  local db=ForeverPlusDB;s,n=boot(db);assert(loadfile(root..'History.lua'))('ForeverPlus',n);s.unix=200000
+  if where=='outside' or where=='unknown' then s.kind='none'
+  elseif where=='other' then s.id=36;s.name='The Deadmines'
+  elseif where=='missing' then GetInstanceInfo=function() error('transient') end end
+  s:entry();r=assert(n.GetRun(),'saved ongoing run must resume '..where)
+  eq(r.key,key);eq(r.confidence,confidence);eq(r.instanceID,where=='unknown' and 987 or 389)
+  eq(r.startUnix,100000);eq(n.Elapsed(r),100000);eq(r.deaths,1);eq(r.nativeCount,2);eq(r.bossDeductions,1);eq(r.kills,1)
+  eq(r.excludedBossKeys['encounter:101'],true);eq(r.history.id,history.id);eq(#n.History.List(),0)
+  eq(r.history.players[1].deaths,history.players[1].deaths)
+  if where~='unknown' then eq(n.CountBossesDown(r),1) end
+ end
+end)
+test('negative future and nonfinite saved starts are rejected outside',function()
+ for _,start in ipairs({-1,100001,math.huge,0/0,'bad'}) do
+  local s,n=boot({currentRun={key='rfc',startUnix=start}});s.kind='none';s:entry()
+  eq(n.GetRun(),nil);eq(ForeverPlusDB.currentRun,nil)
+ end
+end)
+test('explicit abandonment archives once manually and blocks same-visit autostart across reload',function()
+ for _,reason in ipairs({'slash','vote'}) do
+  local s,n=boot();s.units.player={guid='Player-1',player=true,dead=false};assert(loadfile(root..'History.lua'))('ForeverPlus',n)
+  n.StartRun(n.DUNGEONS.rfc);s.clock=160;s.unix=100060;n.AbandonRun(reason)
+  eq(n.GetRun(),nil);eq(ForeverPlusDB.currentRun,nil);eq(#n.History.List(),1)
+  eq(n.History.List()[1].manual,true);eq(n.History.List()[1].status,'abandoned')
+  n.AbandonRun(reason);n.CheckZone();eq(n.GetRun(),nil);eq(#n.History.List(),1)
+  local db=ForeverPlusDB;s,n=boot(db);s:entry();n.CheckZone();eq(n.GetRun(),nil)
+  local api=GetInstanceInfo;GetInstanceInfo=function() error('transient') end;n.CheckZone();GetInstanceInfo=api;n.CheckZone();eq(n.GetRun(),nil)
+  s.kind='none';n.CheckZone();s.kind='party';n.CheckZone();assert(n.GetRun().active)
+ end
+end)
+test('abandon permits a different dungeon entry and explicit reset in same dungeon',function()
+ local s,n=boot();n.StartRun(n.DUNGEONS.rfc);n.AbandonRun('slash');SlashCmdList.FOREVERPLUS('reset');assert(n.GetRun() and n.GetRun().active)
+ n.AbandonRun('slash');s.name='The Deadmines';s.id=36;n.CheckZone();eq(n.GetRun().key,'dm')
+ n.CompleteRun('test');s.name='Ragefire Chasm';s.id=389;n.CheckZone();eq(n.GetRun().key,'rfc');assert(n.GetRun().active)
+end)
+test('old zone reasons cannot abandon an active real run',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc)
+ for _,reason in ipairs({'left','ZONE_CHANGED_NEW_AREA','PLAYER_ENTERING_WORLD'}) do n.AbandonRun(reason);eq(n.GetRun(),r) end
+end)
+test('abandoning outside allows the next original entry and practice cannot erase saved real run',function()
+ local s,n=boot();n.StartRun(n.DUNGEONS.rfc);s.kind='none';n.CheckZone();n.AbandonRun('slash')
+ s.kind='party';n.CheckZone();assert(n.GetRun() and n.GetRun().active,'outside abandon must allow actual reentry')
+ local db=ForeverPlusDB;s,n=boot(db);s.kind='none';n.ToggleDemo();assert(n.GetRun() and not n.GetRun().practice,'saved active run must prevent demo overlay')
+ n.CheckZone();eq(ForeverPlusDB.currentRun.startUnix,100000)
+end)
+test('public start and abandon APIs restore saved ongoing state before acting after reload',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);s:kill(1);local db=ForeverPlusDB
+ s,n=boot(db);s.id=36;s.name='The Deadmines';r=n.StartRun(n.DUNGEONS.dm);eq(r.key,'rfc');eq(r.kills,1);eq(r.startUnix,100000)
+ db=ForeverPlusDB;s,n=boot(db);s.units.player={guid='Player-1',player=true};assert(loadfile(root..'History.lua'))('ForeverPlus',n)
+ n.AbandonRun('slash');eq(n.GetRun(),nil);eq(#n.History.List(),1)
+end)
+test('practice preserves abandoned same-instance suppression',function()
+ local s,n=boot();n.StartRun(n.DUNGEONS.rfc);n.AbandonRun('slash');n.ToggleDemo();n.CheckZone();assert(n.GetRun().practice)
+ n.ToggleDemo();n.CheckZone();eq(n.GetRun(),nil)
+end)
+test('wrong dungeon cannot change progress or alive boss evidence while original run keeps ticking',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);s:kill(1)
+ s.id=36;s.name='The Deadmines';n.CheckZone();eq(n.GetRun(),r)
+ s.units.focus={name='Oggleflint',dead=false,hostile=true};s.tick();eq(next(r.bossNameSeen),nil)
+ s:kill(2);s.event(nil,'BOSS_KILL',1,'Oggleflint');eq(r.kills,1);eq(n.CountBossesDown(r),0)
+ eq(n.IsRunInCurrentInstance(),false);s.id=389;s.name='Ragefire Chasm';n.CheckZone();eq(n.IsRunInCurrentInstance(),true)
+ s:kill(3);eq(r.kills,2)
+end)
+test('higher confidence same session wing refinement preserves timer ledger and history',function()
+ local s,n=boot();s.name='Scarlet Monastery';s.id=189;n.CheckZone();local r=n.GetRun();s:kill(1);s.event(nil,'PLAYER_DEAD')
+ local down=r.bossDown;local ledger=r.excludedBossKeys;s.clock=150;s.sub='Library';n.CheckZone()
+ eq(n.GetRun(),r);eq(r.key,'smlib');eq(r.confidence,2);eq(r.startUnix,100000);eq(n.Elapsed(r),50);eq(r.kills,1);eq(r.deaths,1);eq(r.bossDown,down);eq(r.excludedBossKeys,ledger)
+ s.sub='';n.CheckZone();eq(r.key,'smlib');eq(r.confidence,2)
+end)
+test('slash abandonment requests vote and refreshes UI without bypassing module',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);local requests,refreshes=0,0
+ n.Vote={Request=function() requests=requests+1 end};n.UI={HideSoon=function() end, RefreshVote=function() refreshes=refreshes+1 end}
+ SlashCmdList.FOREVERPLUS('abandon');eq(requests,1);eq(refreshes,1);eq(n.GetRun(),r)
+ n.UI=nil;n.Vote=nil;SlashCmdList.FOREVERPLUS('abandon');eq(n.GetRun(),nil)
 end)
 test('exact names explicit aliases conflicting IDs and no empty roster completion',function()
  local s,n=boot()
@@ -215,7 +331,39 @@ test('boss party reporting uses modern chat fallback but never reports solo raid
  n.StartRun(n.DUNGEONS.rfc);n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(#sent,1)
  s.group=false;n.OnCreatureDead(nil,11520,'Taragaman the Hungerer','BOSS_KILL');eq(#sent,1)
  s.group=true;s.raid=true;n.OnCreatureDead(nil,11518,'Jergosh the Invoker','BOSS_KILL');eq(#sent,1)
- n.AbandonRun('test');n.ToggleDemo();n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(#sent,1)
+ n.AbandonRun('slash');n.ToggleDemo();n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(#sent,1)
+end)
+test('boss report payload has no chat escapes or controls and stays within byte limit',function()
+ for _,long in ipairs({false,true}) do
+  local s,n=boot();s.group=true;local sent={}
+  SendChatMessage=function(msg,ch) assert(not msg:find('[|%c]'),'unsafe chat escape or control');assert(#msg<=255);sent[#sent+1]=msg end
+  local r=n.StartRun(n.DUNGEONS.rfc);local b=r.dungeon.bosses[1]
+  if long then b.n=string.rep('X',300)..'|\n' end
+  n.OnCreatureDead(nil,b.id,b.n,'BOSS_KILL');eq(#sent,1)
+ end
+end)
+test('boss reports prefer modern API and route only known instance category to instance chat',function()
+ for _,category in ipairs({'legacy','enum','absent'}) do
+  local s,n=boot();s.group=true;s.instanceGroup=true;local modern,legacy=0,0
+  if category=='legacy' then LE_PARTY_CATEGORY_INSTANCE=2 elseif category=='enum' then Enum={PartyCategory={Instance=2}} end
+  SendChatMessage=function() legacy=legacy+1;error('obsolete stub') end
+  C_ChatInfo={SendChatMessage=function(msg,ch) modern=modern+1;eq(ch,category=='absent' and 'PARTY' or 'INSTANCE_CHAT') end}
+  n.StartRun(n.DUNGEONS.rfc);n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(modern,1);eq(legacy,0)
+ end
+end)
+test('boss report debug distinguishes skips acceptance and failures without exposing secret errors',function()
+ for _,mode in ipairs({'solo','raid','missing','accepted','false','error','secret'}) do
+  local s,n=boot();s.group=mode~='solo';s.raid=mode=='raid';local messages={}
+  DEFAULT_CHAT_FRAME={AddMessage=function(_,msg) messages[#messages+1]=msg end}
+  if mode~='missing' then SendChatMessage=function()
+   if mode=='false' then return false elseif mode=='error' then error('chat|blocked\nreason') elseif mode=='secret' then error(secret) end
+  end end
+  n.StartRun(n.DUNGEONS.rfc);n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');SlashCmdList.FOREVERPLUS('debug')
+  local out=table.concat(messages,'\n');DEFAULT_CHAT_FRAME=nil
+  assert(out:find('Boss report',1,true),'missing report diagnostics')
+  local expected=({solo='not in group',raid='raid group',missing='API unavailable',accepted='delivery unverified', ['false']='API returned false',error='chatblocked reason',secret='restricted error'})[mode]
+  assert(out:find(expected,1,true),out)
+ end
 end)
 test('chat send failure does not interrupt boss credit or retry duplicate public messages',function()
  local s,n=boot();s.group=true;local calls=0
@@ -257,7 +405,7 @@ test('name evidence persists resume but reset and unrelated new runs cannot inhe
  s.units.focus={name='Oggleflint',guid=secret,dead=true,hostile=false};s.tick();eq(n.CountBossesDown(r),1)
  s.units.focus.dead=false;s.units.focus.hostile=true;s.tick();SlashCmdList.FOREVERPLUS('reset')
  s.units.focus.dead=true;s.units.focus.hostile=false;s.tick();eq(n.CountBossesDown(r),0)
- n.AbandonRun('test');r=n.StartRun(n.DUNGEONS.rfc);s.tick();eq(n.CountBossesDown(r),0)
+ n.AbandonRun('slash');r=n.StartRun(n.DUNGEONS.rfc);s.tick();eq(n.CountBossesDown(r),0)
 end)
 test('name-only boss scan confirms sibling wing without forcing unrelated dungeons',function()
  local s,n=boot();s.name='Scarlet Monastery';s.id=189;n.CheckZone();local r=n.GetRun()
@@ -375,5 +523,5 @@ test('successful encounter only optional boss excludes once and failed encounter
  s.event(nil,'BOSS_KILL',102,secret);s.event(nil,'ENCOUNTER_END',102,'Optional',1,5,1)
  eq(r.bossDeductions,1);eq(r.kills,1);eq(n.CountBossesDown(r),0)
 end)
-for _,t in ipairs(tests) do local ok,err=pcall(t[2]); if ok then passed=passed+1; print('PASS '..t[1]) else print('FAIL '..t[1]..': '..err) end end
+for _,t in ipairs(tests) do local ok,err=xpcall(t[2],debug.traceback); if ok then passed=passed+1; print('PASS '..t[1]) else print('FAIL '..t[1]..': '..err) end end
 print(string.format('%d/%d passed',passed,#tests)); if passed~=#tests then os.exit(1) end

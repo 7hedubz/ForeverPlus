@@ -3,7 +3,7 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.1.4"
+ns.ver = "1.2.0"
 
 local LIMIT = ns.LIMIT
 local Secret = ns.IsSecret
@@ -65,6 +65,10 @@ local function DB()
         if not Number(d.pos.y) then d.pos.y = 0 end
     end
     if not Number(d.minimap.angle) then d.minimap.angle = 198 end
+    local blocked = d.abandonedRun
+    if blocked ~= nil and (Secret(blocked) or type(blocked) ~= "table"
+        or Secret(blocked.key) or type(blocked.key) ~= "string"
+        or (blocked.instanceID ~= nil and not Number(blocked.instanceID))) then d.abandonedRun = nil end
     local s = d.currentRun
     if s ~= nil then
         if Secret(s) or type(s) ~= "table" or type(s.key) ~= "string" or Secret(s.key) or not Number(s.startUnix) then
@@ -87,6 +91,13 @@ end
 ns.DB = DB
 
 local run -- current timed run
+-- Session-local identity: reload also discards all abandon votes/offers.
+local attemptGeneration = 0
+local function NextAttempt()
+    attemptGeneration = attemptGeneration + 1
+    return attemptGeneration
+end
+local ResumeIfNeeded
 local function RecomputeForces(r)
     r.kills = r.forcesBaseline + math.max(0, r.nativeCount - r.bossDeductions)
     r.forces = ns.ForcesPercent(r)
@@ -114,6 +125,7 @@ local function ActivePartyRun()
     if run.instanceID and inst.instanceID and run.instanceID ~= inst.instanceID then return false end
     return dungeon.key == run.key or (run.instanceID and run.instanceID == inst.instanceID)
 end
+ns.IsRunInCurrentInstance = ActivePartyRun
 local function ExcludeBoss(boss, name, source, encounterID)
     local keys = {}
     if boss then keys[#keys + 1] = "boss:" .. boss.n
@@ -221,11 +233,11 @@ local SafeInstance = ns.SafeInstance
 
 function ns.StartRun(dungeon, reason)
     if not dungeon then return end
-    if run and run.active and run.key == dungeon.key then
-        return run
-    end
-    if run and run.active and ns.History then ns.History.Archive(run,"abandoned",false) end
-    -- Leaving and re-entering a fresh instance starts a new key.
+    ResumeIfNeeded()
+    -- Only an explicit end/reset may replace an ongoing real run.
+    if run and run.active and not run.practice then return run end
+    if run and run.active and run.key == dungeon.key then return run end
+    if not dungeon.practice and reason ~= "demo" then DB().abandonedRun = nil end
     run = {
         active = true,
         complete = false,
@@ -236,6 +248,7 @@ function ns.StartRun(dungeon, reason)
         confidence = select(2, ns.ResolveDungeon()) or 1,
         startUnix = Now(),
         startGetTime = GetTime(),
+        attemptGeneration = NextAttempt(),
         deaths = 0,
         reason = reason or "enter",
         practice = dungeon.practice or reason == "demo" or false,
@@ -260,11 +273,13 @@ function ns.StartRun(dungeon, reason)
 end
 
 function ns.AbandonRun(reason)
+    ResumeIfNeeded()
     if run and run.practice then
         run = nil
         if ns.UI then ns.UI.HideNow() end
         return -- practice never owns the saved real-session marker
     end
+    if reason ~= "slash" and reason ~= "vote" then return end
     if run and run.complete and not run.practice then
         if ns.UI then ns.UI.HideSoon() end
         return
@@ -275,14 +290,11 @@ function ns.AbandonRun(reason)
         if ns.UI then ns.UI.HideSoon() end
         return
     end
-    if run.complete then
-        run.active = false
-        DB().currentRun = nil
-        if ns.UI then ns.UI.HideSoon() end
-        return
-    end
-    if ns.History then ns.History.Archive(run,"abandoned",reason=="slash") end
-    Print("Key abandoned (" .. (reason or "left instance") .. "). Time not saved.")
+    if ns.History then ns.History.Archive(run,"abandoned",true) end
+    DB().abandonedRun = {key=run.key, instanceID=run.instanceID}
+    local inst = SafeInstance()
+    if inst and inst.instanceType ~= "party" then DB().abandonedRun = nil end
+    Print("Key abandoned (" .. reason .. "). Time not saved.")
     run = nil
     DB().currentRun = nil
     if ns.UI then ns.UI.HideSoon() end
@@ -348,33 +360,44 @@ function ns.CompleteRun(bossName, source)
     if ns.Comm then ns.Comm.QueueShare() end
 end
 
-local function ResumeIfNeeded()
+ResumeIfNeeded = function()
     if run then return end
-    local inst = SafeInstance()
-    if not inst or inst.instanceType ~= "party" then return end
     local saved = DB().currentRun
-    if not saved or not saved.startUnix then return end
-    local dungeon, confidence = ns.ResolveDungeon()
-    if not dungeon then return end
-    if not SameSession(saved, dungeon, inst) then DB().currentRun = nil; return end
-    if (saved.confidence or 1) >= (confidence or 1) then
-        dungeon = ns.DungeonByKey(saved.key) or dungeon
-    end
+    if not saved then return end
     local elapsedUnix = Now() - saved.startUnix
-    if not saved.complete and (elapsedUnix < 0 or elapsedUnix > 12 * 3600) then
+    if saved.startUnix < 0 or elapsedUnix < 0 then
         DB().currentRun = nil
         return
+    end
+    local inst = SafeInstance()
+    local resolved, confidence = ns.ResolveDungeon()
+    local same = inst and resolved and SameSession(saved, resolved, inst)
+    -- A finished marker belongs only to its current visit. An ongoing run
+    -- belongs to the player, even while outside or the instance API is absent.
+    if saved.complete and not same then return end
+    local storedDungeon = ns.DungeonByKey(saved.key)
+    if not storedDungeon then
+        storedDungeon = {
+            key=saved.key, name=type(saved.name)=="string" and not Secret(saved.name) and saved.name or "Dungeon",
+            bosses={}, lastBosses={}, lastNpc={}, unknown=true,
+        }
+    end
+    local dungeon = storedDungeon
+    local runConfidence = saved.confidence or 1
+    if same and (confidence or 1) > runConfidence and not saved.complete then
+        dungeon, runConfidence = resolved, confidence or 1
     end
     run = {
         active = not saved.complete,
         complete = saved.complete or false,
-        confidence = saved.confidence or confidence or 1,
+        confidence = runConfidence,
         key = dungeon.key,
         name = dungeon.name,
         dungeon = dungeon,
-        instanceID = inst.instanceID,
+        instanceID = saved.instanceID,
         startUnix = saved.startUnix,
         startGetTime = GetTime() - elapsedUnix,
+        attemptGeneration = NextAttempt(),
         deaths = saved.deaths or 0,
         reason = "resume",
         sec = saved.complete and (Number(saved.sec) and math.max(0, saved.sec) or math.max(0, elapsedUnix)) or nil,
@@ -396,6 +419,15 @@ function ns.CheckZone(reason)
     ResumeIfNeeded()
     local inst = SafeInstance()
     if not inst then return end
+    local blocked = DB().abandonedRun
+    if blocked then
+        if inst.instanceType == "party" then
+            local dungeon = ns.ResolveDungeon()
+            if not dungeon or SameSession(blocked, dungeon, inst) then return end
+        end
+        -- Clear only on observed outside/different-dungeon entry, never API loss.
+        DB().abandonedRun = nil
+    end
     if inst.instanceType == "party" then
         local dungeon, confidence = ns.ResolveDungeon()
         if dungeon then
@@ -408,20 +440,19 @@ function ns.CheckZone(reason)
                 end
                 return
             end
-            if run and run.active and ns.History then ns.History.Archive(run,"abandoned",false) end
+            if run and run.active then return end
             run = nil
             DB().currentRun = nil
             ns.StartRun(dungeon, reason)
         end
     else
-        -- A real departure ends its session even if a practice overlay is up.
+        if run and run.active and not run.practice then return end
+        -- Completed sessions may be cleared on an actual departure; active ones never are.
         DB().currentRun = nil
         if run and run.practice then
             return
         end
-        if run and run.active and not run.complete then
-            ns.AbandonRun(reason or "left")
-        elseif run and run.complete then
+        if run and run.complete then
             run.active = false
             if ns.UI then ns.UI.HideSoon() end
             if ns.Comm then ns.Comm.QueueShare() end
@@ -440,23 +471,52 @@ local function NpcIdFromGUID(guid)
     return nil
 end
 
+local bossReport = {attempts=0, accepted=0, failures=0, skips=0, status="not attempted"}
+local function ReportSkip(reason)
+    bossReport.skips = bossReport.skips + 1
+    bossReport.status = "skipped: " .. reason
+end
+local function ChatError(value)
+    if Secret(value) then return "restricted error" end
+    if type(value) ~= "string" then return "unavailable error" end
+    return value:gsub("|", ""):gsub("%c", " "):sub(1, 160)
+end
 local function PostBossProgress(bossName, down, total)
-    if not run or run.practice or Read(IsInGroup) ~= true or Read(IsInRaid) == true then return end
-    local send = SendChatMessage or (C_ChatInfo and C_ChatInfo.SendChatMessage)
-    if type(send) ~= "function" then return end
+    if not run or run.practice then ReportSkip("no real run"); return end
+    if Read(IsInGroup) ~= true then ReportSkip("not in group"); return end
+    if Read(IsInRaid) == true then ReportSkip("raid group"); return end
+    -- Modern namespace first; the legacy global can be an obsolete client stub.
+    local send = C_ChatInfo and C_ChatInfo.SendChatMessage
+    local api = "C_ChatInfo.SendChatMessage"
+    if type(send) ~= "function" then send, api = SendChatMessage, "SendChatMessage" end
+    if type(send) ~= "function" then ReportSkip("API unavailable"); return end
+    local category = LE_PARTY_CATEGORY_INSTANCE
+    if not Number(category) and type(Enum) == "table" and type(Enum.PartyCategory) == "table" then
+        category = Enum.PartyCategory.Instance
+    end
+    local channel = Number(category) and Read(IsInGroup, category) == true and "INSTANCE_CHAT" or "PARTY"
     local clock, overtime = ns.FormatClock(Elapsed(run), LIMIT)
     local label = overtime and ("Overtime " .. clock) or ("Time remaining " .. clock)
     if Secret(bossName) or type(bossName) ~= "string" then bossName = "Boss" end
     bossName = bossName:gsub("[|%c]", "")
     local function message(name)
-        return string.format("ForeverPlus: %s down — %s | Forces %d%% | Bosses %d/%d.",
+        return string.format("ForeverPlus: %s down - %s - Forces %d%% - Bosses %d/%d.",
             name, label, ns.ForcesPercent(run), down, total)
     end
     local text = message(bossName)
     if #text > 255 then text = message("Boss") end
-    -- Public reports are attempted once; retrying could duplicate party chat.
-    local ok, result = pcall(send, text, "PARTY")
-    if not ok or result == false then Print("Boss report could not be sent to party chat.") end
+    -- One attempt only: a void return is normal API acceptance, not delivery
+    -- confirmation. Never retry or fall through to another API and duplicate it.
+    bossReport.attempts = bossReport.attempts + 1
+    local ok, result = pcall(send, text, channel)
+    if not ok or (not Secret(result) and result == false) then
+        bossReport.failures = bossReport.failures + 1
+        bossReport.status = "failed " .. api .. " " .. channel .. ": " .. (ok and "API returned false" or ChatError(result))
+        Print("Boss report " .. bossReport.status)
+    else
+        bossReport.accepted = bossReport.accepted + 1
+        bossReport.status = "accepted by " .. api .. " " .. channel .. "; delivery unverified"
+    end
 end
 
 function ns.OnCreatureDead(guid, npcId, name, source, encounterID)
@@ -538,7 +598,7 @@ local function PartyEngaged(unit)
 end
 
 local function ScanBossUnits(extraUnit, onlyExtra)
-    if not run or not run.active or run.complete or run.practice then return end
+    if not ActivePartyRun() then return end
     local specific = not Secret(extraUnit) and type(extraUnit) == "string" and onlyExtra == true
     local units = specific and {extraUnit} or {"boss1", "boss2", "boss3", "boss4", "boss5", "target", "focus", "mouseover"}
     if not specific then
@@ -773,6 +833,7 @@ C_Timer.NewTicker(0.1, function()
 end)
 
 function ns.ToggleDemo()
+    ResumeIfNeeded()
     if run and run.practice then
         run = nil
         if ns.UI then
@@ -825,6 +886,7 @@ SlashCmdList.FOREVERPLUS = function(msg)
             if ns.History then ns.History.Archive(run,"reset",true) end
             run.startGetTime = GetTime()
             run.startUnix = Now()
+            run.attemptGeneration = NextAttempt()
             run.deaths = 0
             run.kills = 0
             run.forces = 0
@@ -837,7 +899,12 @@ SlashCmdList.FOREVERPLUS = function(msg)
             Persist()
             Print("Timer reset to 1:00:00. Bosses and forces cleared.")
         else
-            Print("No active key.")
+            local dungeon = ns.ResolveDungeon()
+            if dungeon then
+                ns.StartRun(dungeon, "reset")
+            else
+                Print("No active key or current dungeon.")
+            end
         end
         return
     end
@@ -850,7 +917,12 @@ SlashCmdList.FOREVERPLUS = function(msg)
         return
     end
     if msg == "abandon" then
-        ns.AbandonRun("slash")
+        if ns.Vote then
+            ns.Vote.Request()
+            if ns.UI and ns.UI.RefreshVote then ns.UI.RefreshVote() end
+        else
+            ns.AbandonRun("slash")
+        end
         return
     end
     if msg == "times" or msg == "best" then
@@ -880,6 +952,8 @@ SlashCmdList.FOREVERPLUS = function(msg)
         return
     end
     if msg == "debug" then
+        Print(string.format("Boss report: attempts %d, accepted %d, failures %d, skips %d; %s.",
+            bossReport.attempts, bossReport.accepted, bossReport.failures, bossReport.skips, bossReport.status))
         local history = ns.History and run and run.history
         Print(string.format("v%s | Forces %d%% (%d kills) | CLEU readable %d, empty/restricted %d, errors %d | live credits %d (session) | tracked players %d, party deaths %d.",
             ns.ver, ns.ForcesPercent(run), run and run.kills or 0, diagnostics.cleu, diagnostics.empty, diagnostics.errors, diagnostics.liveCredits,

@@ -1,10 +1,10 @@
 # ForeverPlus
 
-Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.1.4**, Interface `16001` (Camelot).
+Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.2.0**, Interface `16001` (Camelot).
 
 ## Install / upgrade
 
-Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.1.3 to 1.1.4** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
+Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.1.4 to 1.2.0** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
 
 ## Dungeon journal
 
@@ -34,7 +34,7 @@ Use **`/fplus sync`**, the journal's **Sync runs** button, or **right-click mini
 
 Example: you record a dungeon with a friend who has no addon. After they install ForeverPlus, group with them (or be online in the same guild), both outside instances, and click Sync. The participant handshake exchanges eligible recorded runs so the friend can see the shared dungeon and its recorded stats. Either participant can initiate; repeated sync is duplicate-safe.
 
-- Forever blocks addon messages inside instances. A request made there waits until outside.
+- Historical run/PB synchronization retains its outside-instance queue policy. Abandon voting uses a separate live party transport attempt; rejected sends fail without ending the run. Do not assume acceptance proves delivery.
 - Both characters must be online and reachable through the same supported party/raid/guild context, using this run-sync version. This is not offline mail or cross-account cloud storage.
 - The addon only exports a run to another recorded participant and only imports runs containing the receiver and sending participant. Realm-qualified names prevent matching a different realm's same-named character.
 - Transfers are chunked, bounded, paced, validated, and retried on send failures. Independent observations of the same physical run are conservatively deduplicated; overlapping observer totals are **never added together**.
@@ -47,7 +47,15 @@ Enter a 5-man dungeon to start a one-hour timer. Rewards are **+3 through 36:00*
 
 Automatic completion requires **all configured required bosses plus 100% enemy forces**: each native party-kill notification contributes 2%, with recognized bosses deducted (50 net non-boss notifications). Bosses do not contribute forces. Empty/unverified rosters, such as Shaper's Terrace and unknown dungeons, are manual-only. If a required kill is unavailable to the client, `/fplus complete` is the explicit override.
 
-Reset/resume and boss-confirmed wing tracking preserve consistent saved state. Completed sessions do not restart merely because of another zone notification or reload; use `/fplus reset` to restart intentionally.
+### Run lifetime and explicit abandon
+
+**Until explicitly abandoned or completed, an active real run never resets itself.** Death, releasing, corpse runs, resurrection, leaving/re-entering, visiting another dungeon, and reload outside the dungeon preserve the original start time, elapsed wall-clock time, deaths, recorded stats, bosses, and forces ledger. There is no automatic twelve-hour expiration. A different dungeon does not replace an unfinished run or contribute objective credit; complete or abandon the old run first. `/fplus reset` remains an intentional manual restart command, not an automatic lifecycle action.
+
+Use the HUD **Abandon** button, **right-click minimap → Abandon run**, or `/fplus abandon`. Solo abandonment requires explicit Yes confirmation. Grouped requests discover compatible voting peers for about three seconds. With responders, all discovered addon voters must agree within twenty seconds; No, timeout, party/run changes, or a rejected local send leave the run active. Non-addon and older-addon players cannot vote. Successful discovery with no responders offers a clearly labeled **local-only** confirmation, not proof that nobody else has the addon. API send rejection never falls back to abandoning automatically.
+
+Voting is best-effort live party communication, not atomic distributed state: packet loss can make clients disagree despite local API acceptance. Votes are not queued for later historical replay, nor can an outsider/guild/raid packet approve a party vote. A reload cancels local in-flight voting while preserving the active run. If the server blocks live transport, the vote reports failure rather than silently approving.
+
+Explicit abandonment archives one abandoned attempt and does not immediately auto-start another timer while you remain in the instance, including after reload. Completed sessions likewise do not restart on another zone notification. A subsequent new entry can start a new attempt; `/fplus reset` deliberately starts fresh when desired.
 
 ### Any-mob forces and boss reports
 
@@ -63,7 +71,7 @@ The saved run keeps its existing progress when upgrading, then persists its new 
 
 Boss tracking remains independent of force GUID eligibility: exact readable names/aliases and verified death can identify required bosses with restricted GUIDs. A prior living-hostile observation supports a corpse that stops being attackable; mere disappearance is not a death. Name-only boss tracking excludes the recognized boss but does not create a native kill event.
 
-Each newly recorded required boss posts **time remaining (or overtime), current Forces %, and boss progress** to PARTY chat after the boss deduction. Duplicate signals do not repeat the report; demo/solo/raid runs do not post. Each addon instance reports its own observation, not a cross-client announcer election. Failed public sends are not retried.
+Each newly recorded required boss posts **time remaining (or overtime), current Forces %, and boss progress** to PARTY chat (INSTANCE_CHAT for an instance-category group) after the boss deduction. Plain-text separators avoid invalid WoW pipe escape codes; `/fplus debug` includes the last send attempt/error, not a delivery guarantee. Duplicate signals do not repeat the report; demo/solo/raid runs do not post. Each addon instance reports its own observation, not a cross-client announcer election. Failed public sends are not retried.
 
 The forbidden CLEU registration remains removed. Optional legacy-parser tests are synthetic and do not imply live damage/healing availability. Run `/fplus debug` after a party kill to see the native-event ledger and boss deductions; target details are optional diagnostics, not a gameplay requirement.
 
