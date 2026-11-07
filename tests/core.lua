@@ -4,9 +4,9 @@ local tests, passed = {}, 0
 local secret = setmetatable({}, {__tostring=function() error('secret tostring') end, __concat=function() error('secret concat') end})
 local function eq(a,b) assert(a==b, tostring(a)..' ~= '..tostring(b)) end
 local function boot(db)
- local s={clock=100, unix=100000, name='Ragefire Chasm', kind='party', id=389, sub='', units={}}
+ local s={clock=100, unix=100000, name='Ragefire Chasm', kind='party', id=389, sub='', units={}, registrations={}}
  ForeverPlusDB=db or {}; SlashCmdList={}
- issecretvalue=function(v) return rawequal(v,secret) end
+ issecretvalue=function(v) return rawequal(v,secret) or rawequal(v,'private-creature-guid') end
  GetTime=function() return s.clock end; time=function() return s.unix end
  IsInGroup=function() return s.group==true end; IsInRaid=function() return s.raid==true end
  SendChatMessage=nil; C_ChatInfo=nil
@@ -30,7 +30,7 @@ local function boot(db)
  strsplit=function(delim,str) local t={}; for x in str:gmatch('[^'..delim..']+') do t[#t+1]=x end return unpack(t) end
  bit=require('bit'); COMBATLOG_OBJECT_AFFILIATION_MINE=1; COMBATLOG_OBJECT_AFFILIATION_PARTY=2; COMBATLOG_OBJECT_AFFILIATION_RAID=4
  COMBATLOG_OBJECT_REACTION_HOSTILE=64; COMBATLOG_OBJECT_TYPE_NPC=2048
- CreateFrame=function() local f={}; f.RegisterEvent=function() end; f.SetScript=function(_,_,fn) s.event=fn end; return f end
+ CreateFrame=function() local f={}; f.RegisterEvent=function(_,event) s.registrations[event]=true end; f.SetScript=function(_,_,fn) s.event=fn end; return f end
  C_Timer={After=function(_,fn) fn() end,NewTicker=function(_,fn) s.tick=fn end}
  CombatLogGetCurrentEventInfo=function() return unpack(s.cleu) end
  local ns={}; assert(loadfile(root..'Dungeons.lua'))('ForeverPlus',ns); assert(loadfile(root..'ForeverPlus.lua'))('ForeverPlus',ns)
@@ -224,6 +224,82 @@ test('unit health handles its visible unit without rescanning every nameplate',f
  C_NamePlate={GetNamePlates=function() scans=scans+1;return {} end}
  s.event(nil,'UNIT_HEALTH','target');eq(scans,0)
  C_NamePlate=nil
+end)
+test('native PARTY_KILL is registered without forbidden CLEU and dedups all sources',function()
+ local s,n=boot();assert(s.registrations.PARTY_KILL,'native PARTY_KILL not registered');assert(not s.registrations.COMBAT_LOG_EVENT_UNFILTERED,'forbidden CLEU registered')
+ local r=n.StartRun(n.DUNGEONS.rfc);s.units.party1={guid='Player-2'}
+ local g='Creature-0-0-0-0-999-native'
+ s.event(nil,'PARTY_KILL','Player-2',g);eq(r.kills,1)
+ s.event(nil,'PARTY_KILL','Player-2',g);s:emit('PARTY_KILL',g);eq(r.kills,1)
+ s.units.focus={guid=g,name='Trash',dead=true,hostile=false};s.tick();eq(r.kills,1)
+ local g2=s:kill('legacy');s.event(nil,'PARTY_KILL','Player-2',g2);eq(r.kills,2)
+ local g3='Creature-0-0-0-0-999-scanned'
+ s.units.focus={guid=g3,name='Trash',dead=false,hostile=true,combat=true,threat={party1=1}};s.tick()
+ s.units.focus.dead=true;s.units.focus.hostile=false;s.tick();eq(r.kills,3)
+ s.event(nil,'PARTY_KILL','Player-2',g3);s:emit('PARTY_KILL',g3);eq(r.kills,3)
+end)
+test('native evidence counters fail closed on secret missing and outsider GUIDs',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);local g='Vehicle-0-0-0-0-999-1'
+ local messages={};DEFAULT_CHAT_FRAME={AddMessage=function(_,m) messages[#messages+1]=m end}
+ s.units.player={guid='Player-1'};s.units.partypet4={guid='Pet-4'}
+ s.event(nil,'PARTY_KILL',secret,g);s.event(nil,'PARTY_KILL','Player-1',secret);s.event(nil,'PARTY_KILL',nil,g)
+ s.event(nil,'PARTY_KILL','Outsider',g);s.event(nil,'PARTY_KILL','Player-1','Player-2');eq(r.kills,0)
+ s.event(nil,'PARTY_KILL','Pet-4',g);eq(r.kills,1)
+ SlashCmdList.FOREVERPLUS('debug');local out=table.concat(messages,'\n')
+ assert(out:find('native PARTY_KILL events 6, readable 3, unreadable 3',1,true),'native counters missing: '..out)
+ DEFAULT_CHAT_FRAME=nil
+end)
+test('secret GUID readable boss name survives alive then verified unattackable death without forces',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc)
+ s.units.boss1={guid=secret,name='Oggleflint',dead=false,hostile=true};s.tick()
+ s.units.boss1=nil;s.tick();eq(n.CountBossesDown(r),0)
+ s.units.focus={guid=secret,name='Oggleflint',dead=true,hostile=false};s.tick()
+ eq(n.CountBossesDown(r),1);eq(r.kills,0);eq(n.ForcesPercent(r),0)
+ s.tick();eq(n.CountBossesDown(r),1)
+end)
+test('name evidence persists resume but reset and unrelated new runs cannot inherit it',function()
+ local s,n=boot();n.StartRun(n.DUNGEONS.rfc)
+ s.units.focus={name='Oggleflint',guid=secret,dead=false,hostile=true};s.tick()
+ local db=ForeverPlusDB;s,n=boot(db);s:entry();local r=n.GetRun()
+ s.units.focus={name='Oggleflint',guid=secret,dead=true,hostile=false};s.tick();eq(n.CountBossesDown(r),1)
+ s.units.focus.dead=false;s.units.focus.hostile=true;s.tick();SlashCmdList.FOREVERPLUS('reset')
+ s.units.focus.dead=true;s.units.focus.hostile=false;s.tick();eq(n.CountBossesDown(r),0)
+ n.AbandonRun('test');r=n.StartRun(n.DUNGEONS.rfc);s.tick();eq(n.CountBossesDown(r),0)
+end)
+test('name-only boss scan confirms sibling wing without forcing unrelated dungeons',function()
+ local s,n=boot();s.name='Scarlet Monastery';s.id=189;n.CheckZone();local r=n.GetRun()
+ s.units.party1target={name='Houndmaster Loksey',guid=secret,dead=false,hostile=true};s.tick()
+ s.units.party1target.dead=true;s.units.party1target.hostile=false;s.tick()
+ eq(r.key,'smlib');eq(n.CountBossesDown(r),1);eq(r.kills,0)
+ s,n=boot();r=n.StartRun(n.DUNGEONS.rfc)
+ s.units.focus={name='Houndmaster Loksey',guid=nil,dead=true,hostile=true};s.tick();eq(r.key,'rfc');eq(n.CountBossesDown(r),0)
+end)
+test('exact alias and canonical name share evidence with missing or secret string GUIDs',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.sfk)
+ s.units.focus={name='Arugal',guid='private-creature-guid',dead=false,hostile=true};s.tick()
+ s.units.focus={name='Archmage Arugal',guid='unknown-guid',dead=true,hostile=false};s.tick()
+ eq(n.CountBossesDown(r),1);eq(r.kills,0)
+end)
+test('first-seen attackable boss corpse is preserved but restricted evidence and near names fail closed',function()
+ for _,mode in ipairs({'attackable','unattackable','nearName','secretName','secretDead','secretHostile','player','conflictingID'}) do
+  local s,n=boot();local r=n.StartRun(n.DUNGEONS.sfk)
+  local u={name='Arugal',guid=nil,dead=true,hostile=true};s.units.focus=u
+  if mode=='unattackable' then u.hostile=false elseif mode=='nearName' then u.name='Arugal Voidwalker'
+  elseif mode=='secretName' then u.name=secret elseif mode=='secretDead' then u.dead=secret
+  elseif mode=='secretHostile' then u.hostile=secret elseif mode=='player' then u.player=true
+  elseif mode=='conflictingID' then u.guid='Creature-0-0-0-0-999-1' end
+  s.tick();eq(n.CountBossesDown(r),mode=='attackable' and 1 or 0);eq(r.kills,0)
+ end
+end)
+test('native secret string arguments and unavailable roster GUIDs never invent credit',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);local g='Creature-0-0-0-0-999-1'
+ s.units.player={guid='private-creature-guid'}
+ s.event(nil,'PARTY_KILL','Player-1',g);s.event(nil,'PARTY_KILL','private-creature-guid',g)
+ s.units.player.guid='Player-1';s.event(nil,'PARTY_KILL','Player-1','private-creature-guid');eq(r.kills,0)
+ for _,unit in ipairs({'player','pet','party4','partypet4'}) do
+  s.units[unit]={guid='Attacker-'..unit};s.event(nil,'PARTY_KILL','Attacker-'..unit,g..unit)
+ end
+ eq(r.kills,4)
 end)
 for _,t in ipairs(tests) do local ok,err=pcall(t[2]); if ok then passed=passed+1; print('PASS '..t[1]) else print('FAIL '..t[1]..': '..err) end end
 print(string.format('%d/%d passed',passed,#tests)); if passed~=#tests then os.exit(1) end

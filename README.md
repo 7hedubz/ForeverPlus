@@ -1,10 +1,10 @@
 # ForeverPlus
 
-Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.1.2**, Interface `16001` (Camelot).
+Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.1.3**, Interface `16001` (Camelot).
 
 ## Install / upgrade
 
-Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0 or 1.1.1 to 1.1.2** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
+Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.1.2 to 1.1.3** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
 
 ## Dungeon journal
 
@@ -51,13 +51,19 @@ Reset/resume and boss-confirmed wing tracking preserve consistent saved state. C
 
 ### Visible kill tracking and boss reports
 
-When CLEU is unavailable, the addon can establish credit from a living, attackable creature in combat with readable party/pet threat or the creature targeting a party member, and a readable false tap-denied flag. It remembers that GUID and awards 2% on a verified visible death even if the corpse is no longer attackable. Nameplates, target, mouseover, and party targets provide visibility; disappearing alone is not a death.
+The native **PARTY_KILL** game event is separate from the blocked combat-log stream. When its attacker GUID matches a current party member/pet and its target GUID is a readable creature/vehicle GUID, the addon awards 2% through the same saved GUID deduplication. This path does not require your selected target or `UnitGUID("target")`. Event payload availability still needs live-client confirmation; restricted payloads are rejected, not exposed or guessed.
+
+A secondary visible-unit path is available only when creature GUIDs are readable: living, attackable creatures in combat need readable party/pet threat (or the creature targeting a party member) and a readable false tap-denied flag. Verified visible death then counts even if the corpse is no longer attackable.
+
+Boss tracking is independent of the force GUID requirement. Readable exact boss names/aliases and verified death can mark a required boss when its GUID is unavailable; prior living-hostile boss evidence covers corpses that stop being attackable. Name-only boss tracking never invents force credit. Mere disappearance is not a death.
+
+Forever forbids CLEU registration on this client, so the addon no longer attempts that protected registration by default. The optional legacy parser remains covered by explicit synthetic-payload tests; those tests do not imply a live combat-log stream exists.
 
 A corpse first seen after the kill, loot rights alone, an idle selected mob, or secret/unavailable engagement data does not establish credit. Earlier missed kills cannot be reliably reconstructed and are not invented. Saved credit and deduplication survive reload. Damage/healing still require readable combat events; this forces fallback does not manufacture combat totals.
 
 Each newly recorded required boss posts **time remaining (or overtime), current Forces %, and boss progress** to normal PARTY chat. Duplicate boss events do not repeat the report; demo/solo/raid runs do not post. Each addon instance reports its own observation; this is not cross-client announcer election. Failed public sends are not retried, to avoid duplicate chat.
 
-If forces still do not move, target a living enemy during the party fight and run `/fplus debug`; repeat after its death. The output reports readable CLEU, live credit, and which target/engagement values are available without exposing secret values.
+If forces still do not move, run `/fplus debug` after a party kill. Native-event counters distinguish no PARTY_KILL notifications from readable/restricted event payloads. Target details are optional diagnostics, not a requirement to target enemies while healing. No command attempts to reveal secret GUIDs.
 
 ## Commands and minimap
 

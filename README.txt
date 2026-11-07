@@ -1,7 +1,7 @@
-ForeverPlus 1.1.2 — WoW Forever dungeon timer and run journal
+ForeverPlus 1.1.3 — WoW Forever dungeon timer and run journal
 ============================================================
 Interface 16001 / Camelot. Install in _forever_/Interface/AddOns/ForeverPlus.
-From 1.1.0 or 1.1.1: /reload. New install or upgrade from before 1.1.0: fully relaunch.
+From 1.1.0-1.1.2: /reload. New install or upgrade from before 1.1.0: fully relaunch.
 
 DUNGEON JOURNAL
 /fplus opens a three-column journal: choose dungeon -> choose run -> stats.
@@ -40,18 +40,21 @@ One hour; +3 through36:00, +2 through48:00, +1 through60:00. Overtime continues.
 Auto-complete = all configured required bosses +100% forces (50 credited
 hostile creature kills at2% each). Unknown/empty rosters require manual finish.
 
-Visible forces fallback observes living hostile party-engaged mobs, stores GUID
-credit, and counts verified death even when a corpse stops being attackable.
-It requires readable combat/tap state plus party threat or the enemy targeting
-a party member. Unseen corpses and old missed kills are not retroactively counted.
-Keep enemy nameplates/party targets visible. Damage/healing still need CLEU.
+Native PARTY_KILL (not CLEU) counts readable creature/vehicle event GUIDs from
+current party/pet attackers without requiring a selected target. Event GUIDs
+may still be restricted; diagnostics distinguish missing/unreadable events.
+Visible force fallback only works with readable GUID and engagement evidence.
+Exact-name boss tracking can use verified deaths without a readable GUID, but
+name-only boss credit does not add forces. Disappearance is not proof of death.
+The addon no longer attempts the forbidden CLEU registration. Damage/healing
+remain unavailable without readable events. Missed kills are not invented.
 Each new required boss posts time remaining/overtime and Forces% to PARTY chat,
 once per recorded boss per addon instance. No demo/solo/raid announcements.
 
 COMMANDS
 /fplus                 dungeon journal
 /fplus sync            synchronize eligible participant run histories
-/fplus debug           show CLEU/visible credit and target API availability
+/fplus debug           show native PARTY_KILL counters and optional target diagnostics
 /fplus lock            toggle timer dragging lock
 /fplus reset           archive reset attempt; restart timer/objectives/stats
 /fplus complete        force-complete current real run

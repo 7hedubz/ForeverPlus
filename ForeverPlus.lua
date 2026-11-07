@@ -3,7 +3,7 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.1.2"
+ns.ver = "1.1.3"
 
 local LIMIT = ns.LIMIT
 local Secret = ns.IsSecret
@@ -73,6 +73,7 @@ local function DB()
             if not Number(s.instanceID) then s.instanceID = nil end
             s.kills, s.deaths = Count(s.kills), Count(s.deaths)
             s.bossDown, s.killSeen, s.killCredit = BoolMap(s.bossDown), BoolMap(s.killSeen), BoolMap(s.killCredit)
+            s.bossNameSeen = BoolMap(s.bossNameSeen)
             s.confidence = Number(s.confidence) and math.max(0, math.min(3, s.confidence)) or 1
             s.complete = not Secret(s.complete) and s.complete == true
         end
@@ -92,6 +93,7 @@ local function Persist()
         key=run.key, name=run.name, instanceID=run.instanceID,
         startUnix=run.startUnix, deaths=run.deaths, kills=run.kills,
         bossDown=run.bossDown, killSeen=run.killSeen, killCredit=run.killCredit,
+        bossNameSeen=run.bossNameSeen,
         confidence=run.confidence, complete=run.complete, sec=run.sec, chest=run.chest, history=run.history,
     }
 end
@@ -194,6 +196,7 @@ function ns.StartRun(dungeon, reason)
         kills = 0,
         forces = 0,
         bossDown = {},
+        bossNameSeen = {},
         killSeen = {},
         killCredit = {},
     }
@@ -331,6 +334,7 @@ local function ResumeIfNeeded()
         chest = Number(saved.chest) and saved.chest or 0,
         kills = saved.kills or 0,
         bossDown = saved.bossDown or {},
+        bossNameSeen = saved.bossNameSeen or {},
         killSeen = saved.killSeen or {},
         killCredit = saved.killCredit or {},
     }
@@ -475,7 +479,7 @@ function ns.OnCreatureDead(guid, npcId, name, source)
     end
 end
 
-local diagnostics = {cleu=0, empty=0, errors=0, liveCredits=0}
+local diagnostics = {cleu=0, empty=0, errors=0, liveCredits=0, native=0, nativeReadable=0, nativeUnreadable=0}
 
 local function PartyEngaged(unit)
     -- A false tap-denied flag alone is not evidence of party participation.
@@ -520,6 +524,36 @@ local function ScanBossUnits(extraUnit, onlyExtra)
             if type(dead) ~= "boolean" then dead = Read(UnitIsDeadOrGhost, u) end
             local guid = Read(UnitGUID, u)
             local npcId = NpcIdFromGUID(guid)
+            if Read(UnitIsPlayer, u) == false then
+                local name = Read(UnitName, u)
+                local dungeon = run.dungeon or ns.DungeonByKey(run.key)
+                local _, boss = ns.MatchRequiredBoss(dungeon, npcId, name)
+                if not boss then
+                    local via = ns.KeyFromKill(npcId, name)
+                    local candidate = via and ns.DUNGEONS[via]
+                    local sibling = false
+                    for _, id in ipairs(dungeon and dungeon.instanceIDs or {}) do
+                        for _, other in ipairs(candidate and candidate.instanceIDs or {}) do
+                            if id == other then sibling = true end
+                        end
+                    end
+                    if sibling then _, boss = ns.MatchRequiredBoss(candidate, npcId, name) end
+                end
+                if boss then
+                    -- Canonical boss identity, not a unit token or secret GUID.
+                    -- Disappearance never counts: require an explicit dead=true.
+                    run.bossNameSeen = run.bossNameSeen or {}
+                    if dead == false and Read(UnitCanAttack, "player", u) == true then
+                        if not run.bossNameSeen[boss.n] then
+                            run.bossNameSeen[boss.n] = true
+                            Persist()
+                        end
+                    elseif dead == true and (run.bossNameSeen[boss.n] or Read(UnitCanAttack, "player", u) == true) then
+                        ns.OnCreatureDead(guid, npcId, name, u)
+                        if run and run.complete then return end
+                    end
+                end
+            end
             if npcId and Read(UnitIsPlayer, u) == false then
                 if dead == false and Read(UnitCanAttack, "player", u) == true
                     and not run.killCredit[guid] and not run.killSeen[guid] and PartyEngaged(u) then
@@ -560,7 +594,9 @@ f:RegisterEvent("UNIT_PET")
 for _, event in ipairs({"NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UNIT_TARGET", "UNIT_THREAT_LIST_UPDATE", "UNIT_THREAT_SITUATION_UPDATE"}) do
     pcall(f.RegisterEvent, f, event)
 end
-pcall(function() f:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED") end)
+f:RegisterEvent("PARTY_KILL")
+-- Forever forbids CLEU registration. Keep the handler below for readable legacy
+-- dispatch/testing only; pcall registration still raises client error reports.
 pcall(function() f:RegisterEvent("ENCOUNTER_START") end)
 
 f:SetScript("OnEvent", function(_, event, ...)
@@ -647,6 +683,35 @@ f:SetScript("OnEvent", function(_, event, ...)
         if ns.History then ns.History.Roster(run); Persist() end
         if ns.Comm then ns.Comm.OnRoster() end
         if ns.Sync then ns.Sync.OnRoster() end
+        return
+    end
+
+    if event == "PARTY_KILL" then
+        local attackerGUID, targetGUID = ...
+        -- This native event is not the CLEU subevent. Never coerce restricted
+        -- arguments, nor use them as table keys or compare them to roster GUIDs.
+        diagnostics.native = diagnostics.native + 1
+        if Secret(attackerGUID) or Secret(targetGUID)
+            or type(attackerGUID) ~= "string" or type(targetGUID) ~= "string" then
+            diagnostics.nativeUnreadable = diagnostics.nativeUnreadable + 1
+            return
+        end
+        diagnostics.nativeReadable = diagnostics.nativeReadable + 1
+        local npcId = NpcIdFromGUID(targetGUID)
+        if not npcId or not run or not run.active or run.complete or run.practice then return end
+        local members = {"player", "pet"}
+        for i = 1, 4 do
+            members[#members + 1] = "party" .. i
+            members[#members + 1] = "partypet" .. i
+        end
+        for _, member in ipairs(members) do
+            local guid = Read(UnitGUID, member)
+            if Read(UnitExists, member) == true and type(guid) == "string" and guid == attackerGUID then
+                run.killCredit[targetGUID] = true
+                ns.OnCreatureDead(targetGUID, npcId, nil, "PARTY_KILL")
+                return
+            end
+        end
         return
     end
 
@@ -752,6 +817,7 @@ SlashCmdList.FOREVERPLUS = function(msg)
             run.kills = 0
             run.forces = 0
             run.bossDown = {}
+            run.bossNameSeen = {}
             run.killSeen = {}
             run.killCredit = {}
             if ns.History then ns.History.Start(run) end
@@ -805,6 +871,8 @@ SlashCmdList.FOREVERPLUS = function(msg)
         Print(string.format("v%s | Forces %d%% (%d kills) | CLEU readable %d, empty/restricted %d, errors %d | live credits %d (session) | tracked players %d, party deaths %d.",
             ns.ver, ns.ForcesPercent(run), run and run.kills or 0, diagnostics.cleu, diagnostics.empty, diagnostics.errors, diagnostics.liveCredits,
             history and #history.players or 0, history and ns.History.TotalDeaths(run) or 0))
+        Print(string.format("native PARTY_KILL events %d, readable %d, unreadable %d (session; readable is not kill credit).",
+            diagnostics.native, diagnostics.nativeReadable, diagnostics.nativeUnreadable))
         local function flag(v)
             if v == true then return "yes" elseif v == false then return "no" end
             return "unavailable"

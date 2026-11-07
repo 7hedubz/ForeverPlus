@@ -83,7 +83,11 @@ fire('PLAYER_ENTERING_WORLD');advance(1)
 assert(ns.GetRun().active)
 local function emit(sub,guid,name)
  cleu={clock,sub,false,'Player-1-Tester','Tester',1,0,guid,name,2112,0,1,'Spell',1,100,0}
- fire('COMBAT_LOG_EVENT_UNFILTERED')
+ -- Deliberately exercise the optional legacy parser, not a live Forever stream.
+ -- The deployed addon must not register the forbidden CLEU event.
+ for _,f in ipairs(frames) do
+  if f.events.BOSS_KILL then f.scripts.OnEvent(f,'COMBAT_LOG_EVENT_UNFILTERED') end
+ end
 end
 for _,boss in ipairs(ns.DUNGEONS.rfc.bosses) do
  fire('BOSS_KILL',0,boss.n)
@@ -143,6 +147,31 @@ C_ChatInfo.SendChatMessage=function(msg,ch) reports[#reports+1]={msg=msg,ch=ch} 
 fire('BOSS_KILL',0,'Ghamoo-ra');fire('ENCOUNTER_END',0,'Ghamoo-ra',1,5,1)
 assert(#reports==1 and reports[1].ch=='PARTY' and reports[1].msg:find('Forces 2%',1,true),'boss party report missing or duplicated')
 print('PASS full addon closed-CLEU visible forces fallback and one boss progress party report')
+-- Native PARTY_KILL is separate from CLEU and does not require a selected target.
+local noTargetExists,baseGUID=UnitExists,UnitGUID
+UnitExists=function(u) if u=='target' then return false end;return noTargetExists(u) end
+issecretvalue=function(v) return v=='private-creature-guid' end
+UnitGUID=function(u) if u=='target' then return 'private-creature-guid' end;return baseGUID(u) end
+local priorKills=ns.GetRun().kills
+local nativeGUID='Creature-0-0-0-0-4824-native'
+fire('PARTY_KILL','Player-1-Friend',nativeGUID)
+assert(ns.GetRun().kills==priorKills+1,'native party kill required UnitGUID(target) or CLEU')
+fire('PARTY_KILL','Player-1-Friend',nativeGUID)
+assert(ns.GetRun().kills==priorKills+1,'native party kill duplicated')
+local oldExists,oldUnitName,oldAttack=UnitExists,UnitName,UnitCanAttack
+local bossDead=false
+UnitExists=function(u) return u=='party1target' or oldExists(u) end
+UnitGUID=function(u) if u=='party1target' then return 'private-creature-guid' end;return baseGUID(u) end
+UnitName=function(u) if u=='party1target' then return 'Lady Sarevess' end;return oldUnitName(u) end
+UnitIsDead=function(u) if u=='party1target' then return bossDead end;return u=='target' and mob.dead or false end
+UnitIsDeadOrGhost=UnitIsDead
+UnitCanAttack=function(a,u) if u=='party1target' then return not bossDead end;return oldAttack(a,u) end
+fire('UNIT_HEALTH','party1target');bossDead=true;fire('UNIT_HEALTH','party1target')
+local down=ns.CountBossesDown(ns.GetRun())
+assert(down==2,'GUID-secret boss was not marked from readable party target name/death')
+assert(ns.GetRun().kills==priorKills+1,'name-only boss invented force credit')
+for _,f in ipairs(frames) do if f.events.BOSS_KILL then assert(not f.events.COMBAT_LOG_EVENT_UNFILTERED,'forbidden CLEU registration remains') end end
+print('PASS native party kills without own target and name-only boss credit with secret creature GUID')
 local oldDead=UnitIsDeadOrGhost
 local friendDead=false
 UnitIsDeadOrGhost=function(u) if u=='party1' then return friendDead end;return oldDead(u) end
