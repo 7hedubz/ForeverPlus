@@ -182,3 +182,28 @@ hardware=true;ForeverPlusMinimapMenu.reportButton.scripts.OnClick();hardware=fal
 assert(sends==2,'minimap click did not synchronously send one report')
 ns.UI.Tick();assert(sends==2,'tick retried a report')
 print('PASS report buttons send synchronously per click, never UI ticks; availability and pending counts refresh')
+-- Optional UI failures cannot keep the forces counter/timer stale.
+local refreshErrors={}
+ns.SafeRefresh=function(stage,fn,...)
+ local ok,err=pcall(fn,...);if not ok then refreshErrors[#refreshErrors+1]={stage=stage,error=err} end;return ok
+end
+local goodVote=ns.UI.RefreshVote
+ns.UI.RefreshVote=function() error('injected vote panel failure') end
+ns.GetBest=function() error('injected best lookup failure') end
+run={key='rfc',name='Ragefire Chasm',active=true,kills=1,deaths=0,dungeon=ns.DUNGEONS.rfc,bossDown={}}
+ns.FORCE_PER_KILL=0.5
+ns.UI.Show()
+local ok=pcall(ns.UI.Tick)
+assert(ok,'optional vote/history failure aborted HUD tick')
+assert(ForeverPlusFrame.obj.text:find('Forces 0.5%',1,true),'fractional forces did not update after optional failure')
+local display=assert(ns.UI.GetDisplayDiagnostics(),'display diagnostics unavailable')
+assert(display.forces==0.5 and display.lastUpdated==GetTime(),'display diagnostics do not describe actual refresh')
+assert(display.text==ForeverPlusFrame.obj.text,'debug display snapshot differs from rendered text')
+assert(#refreshErrors>=2,'optional failures were silently swallowed instead of recorded')
+run.kills=2;ns.UI.Tick()
+assert(ForeverPlusFrame.obj.text:find('Forces 1%',1,true),'HUD did not continue refreshing after recurring failure')
+assert(sends==2,'refresh recovery emitted public chat')
+ns.UI.RefreshVote=goodVote;ns.GetBest=function() return nil end
+run=nil;ns.UI.Tick();display=ns.UI.GetDisplayDiagnostics()
+assert(display.forces==0 and display.text=='Bosses 0/0     Forces 0%','idle display snapshot stayed stale')
+print('PASS optional UI failures do not freeze HUD; fractional forces and display diagnostics stay current')

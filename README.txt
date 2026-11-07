@@ -1,8 +1,8 @@
-ForeverPlus 1.2.1 — WoW Forever dungeon timer and run journal
+ForeverPlus 1.3.0 — WoW Forever dungeon timer and run journal
 ============================================================
 Author: DoHeal. Interface16001 / Camelot.
 Install in _forever_/Interface/AddOns/ForeverPlus.
-From 1.1.0-1.2.0: /reload. New install or upgrade from before1.1.0: relaunch.
+From 1.1.0-1.2.1: /reload. New install or upgrade from before1.1.0: relaunch.
 
 DUNGEON JOURNAL
 /fplus opens dungeon -> individual run -> roster, damage/healing, deaths.
@@ -12,8 +12,8 @@ History retains up to500 runs. Old personal bests cannot recreate missing stats.
 
 FORCES: ANY MOB, EXCLUDING RECOGNIZED BOSSES
 Each native PARTY_KILL notification during an active real party-instance run
-adds one kill (2%), even if all payload values are secret or absent. No target,
-readable GUID, threat, tap, or hostility filter is required. Fifty net kills
+adds one kill (0.5%), even if all payload values are secret or absent. No target,
+readable GUID, threat, tap, or hostility filter is required. Two hundred net kills
 reach100%. Recognized boss deaths are deducted once; duplicate boss signals
 must not subtract again. Optional/unknown-roster boss signals also exclude.
 Order before/after a native notification converges; a late boss notification
@@ -21,8 +21,9 @@ can correct forces downward. A boss the client never identifies cannot be
 classified from an opaque kill. Two native notifications count as two events,
 not a GUID-verified unique enemy. No hidden IDs are exposed or reconstructed.
 Only native notifications add forces: scans/CLEU cannot double-count a kill.
-Existing progress is preserved on upgrade; new ledger/exclusions persist on
-reload. Earlier rejected session notifications are not guessed/backfilled.
+Kill counts, timer and ledger/exclusions persist on reload. The new 0.5%
+rate recalculates ongoing percentages from the same kills (one quarter of
+the prior 2% figure), without resetting the run. Old PBs/history stay intact. Earlier rejected session notifications are not guessed/backfilled.
 
 RUN LIFETIME / ABANDON
 An active run never resets until explicitly abandoned or completed. Death,
@@ -62,10 +63,20 @@ No automatic retry/fallback after a send. Rejected calls retain the report for
 manual retry. A normal nil return consumes the attempted line, NOT proof of
 delivery. /fplus debug shows cumulative attempts/errors and last status, with
 delivery unverified. The HUD report button shows how many lines are pending.
+Report text/tooltip explicitly say AT BOSS DEATH, not current HUD progress.
 Report snapshots are session-only and bounded; reset/abandon/new attempt,
 party context changes or reload discard stale reports. Completion permits
 its final queued snapshot. No solo/raid/demo reports or duplicate boss-event
 reports; no cross-client announcer election.
+
+REFRESH RELIABILITY
+History/boss scan failures and optional report/vote/best/death/journal UI errors
+cannot block the core HUD timer/objective refresh. Kill changes request an
+immediate safe HUD update. /fplus debug shows refresh errors by stage and the
+actual last-displayed HUD state, distinct from frozen boss-death reports.
+200 net kills may exceed a short dungeon/wing's available trash. No verified
+Forever population quotas are bundled. /fplus complete remains the manual
+override; dungeon-specific scaling is not silently applied.
 
 STATS AND DEATHS
 Damage excludes overkill, healing excludes overhealing, known pets attribute

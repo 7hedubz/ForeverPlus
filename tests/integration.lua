@@ -98,7 +98,7 @@ end
 assert(ns.GetRun().kills==0,'boss notifications were included in forces')
 local before=#sent
 advance(60)
-for i=1,50 do
+for i=1,200 do
  local guid='Creature-0-0-0-0-999-'..i
  emit('SPELL_DAMAGE',guid,'Trash');emit('UNIT_DIED',guid,'Trash')
  fire('PARTY_KILL','opaque-attacker','opaque-target')
@@ -110,7 +110,7 @@ assert(#history==1,'completed run was not archived')
 assert(#history[1].players==2,'non-addon friend missing from roster')
 local foundPlayer=false
 for _,p in ipairs(history[1].players) do
- if p.name=='Tester-Realm' then assert(p.damage==5000,'observed damage not archived');foundPlayer=true end
+ if p.name=='Tester-Realm' then assert(p.damage==20000,'observed damage not archived');foundPlayer=true end
 end
 assert(foundPlayer,'local participant missing')
 ns.UI.SelectDungeon('rfc')
@@ -147,7 +147,7 @@ fire('COMBAT_LOG_EVENT_UNFILTERED')
 fire('UNIT_HEALTH','target');mob.dead=true;fire('UNIT_HEALTH','target')
 assert(ns.GetRun().kills==0,'visible scans should no longer add forces')
 fire('PARTY_KILL','opaque-attacker','opaque-target')
-assert(ns.ForcesPercent(ns.GetRun())==2,'opaque native kill notification did not count')
+assert(ns.ForcesPercent(ns.GetRun())==0.5,'opaque native kill notification did not count')
 fire('UNIT_FLAGS','target');assert(ns.GetRun().kills==1,'duplicate corpse counted')
 local reports={}
 local hardware, publicCalls=false,0
@@ -161,7 +161,7 @@ fire('PARTY_KILL','opaque-attacker','opaque-target')
 fire('BOSS_KILL',0,'Ghamoo-ra');fire('ENCOUNTER_END',0,'Ghamoo-ra',1,5,1)
 assert(publicCalls==0 and #reports==0,'boss callback attempted public chat without player action')
 local queued=ns.GetPendingBossReport()
-assert(queued and queued.text:find('Forces 2%',1,true) and queued.count==1,'post-deduction report not prepared/deduplicated')
+assert(queued and queued.text:find('Forces 0.5%',1,true) and queued.count==1,'post-deduction report not prepared/deduplicated')
 advance(2);ns.UI.Tick()
 assert(publicCalls==0,'timer/UI tick attempted public chat')
 assert(ForeverPlusFrame:IsShown() and ForeverPlusFrame.reportButton,'ready report did not expose click action')
@@ -259,6 +259,29 @@ fire('PARTY_KILL','opaque-attacker','opaque-target')
 assert(persistent.kills==2,'original dungeon stopped counting after return')
 ns.UI.Show();ns.UI.Tick()
 assert(ForeverPlusFrame.abandonButton,'real HUD abandon action absent')
+-- Repeated history/scanner/optional-panel errors must not freeze real HUD values.
+local goodUnitState,goodKeyFromKill,goodVote=ns.History.UnitState,ns.KeyFromKill,ns.UI.RefreshVote
+local oldForce=ns.ForcesPercent(persistent)
+local previousClock=ForeverPlusFrame.clock.text
+ns.History.UnitState=function() error('injected history refresh failure') end
+ns.KeyFromKill=function() error('injected boss scan failure') end
+ns.UI.RefreshVote=function() error('injected optional vote UI failure') end
+local callsBeforeFaults=publicCalls
+fire('PARTY_KILL','opaque-attacker','opaque-target')
+assert(ns.UI.GetDisplayDiagnostics().forces==oldForce+0.5,'native kill did not immediately update HUD while optional panel failed')
+advance(3)
+local displayed=ns.UI.GetDisplayDiagnostics()
+assert(displayed.forces==ns.ForcesPercent(persistent),'periodic faults froze forces independently of core')
+assert(ForeverPlusFrame.clock.text~=previousClock,'timer froze during refresh errors')
+assert(displayed.text==ForeverPlusFrame.obj.text)
+local diagnostics=ns.GetRefreshDiagnostics()
+assert(diagnostics.errors>=3,'refresh failures were not captured')
+assert(publicCalls==callsBeforeFaults,'fault recovery sent public chat')
+ns.History.UnitState,ns.KeyFromKill,ns.UI.RefreshVote=goodUnitState,goodKeyFromKill,goodVote
+advance(1)
+assert(ns.UI.GetDisplayDiagnostics().forces==ns.ForcesPercent(persistent),'recovery drifted from core')
+print('PASS injected scanner/history/vote failures preserve immediate forces, periodic clock, error diagnostics and click-only chat')
+
 -- Explicit solo confirmation via the real comm module cannot end the run early.
 IsInGroup=function() return false end
 ForeverPlusFrame.abandonButton.scripts.OnClick()

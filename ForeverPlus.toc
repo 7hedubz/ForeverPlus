@@ -3,7 +3,7 @@
 ## Title: ForeverPlus
 ## Notes: Dungeon timer and run journal: party roster, observed damage/healing/deaths, and participant run sync outside instances.
 ## Author: DoHeal
-## Version: 1.2.1
+## Version: 1.3.0
 ## SavedVariables: ForeverPlusDB
 ## IconTexture: Interface\AddOns\ForeverPlus\Media\icon
 ## Category: Dungeons & Raids

@@ -67,11 +67,97 @@ test('attempt generation changes on same-second resets and new attempts only',fu
  s,n=boot();s.name='Scarlet Monastery';s.id=189;n.CheckZone();r=n.GetRun();generation=r.attemptGeneration
  s.sub='Library';n.CheckZone();eq(r.key,'smlib');eq(r.attemptGeneration,generation)
 end)
+test('history unit fault cannot freeze HUD timer or stop other history units and persistence',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);local visited={};local display={}
+ n.History={UnitState=function(_,unit) visited[unit]=(visited[unit] or 0)+1;if unit=='player' then error('history|broken\nline') end end}
+ n.UI={Tick=function() display.forces=n.FormatForces(r);display.elapsed=n.Elapsed(r) end}
+ s.clock=101;s.tick();eq(display.elapsed,1);eq(visited.party4,1)
+ s:kill(1);eq(display.forces,'0.5%');eq(ForeverPlusDB.currentRun.nativeCount,1)
+ s.clock=102;s.tick();eq(display.elapsed,2);eq(visited.party4,2)
+ local health=n.GetRefreshDiagnostics();eq(health.errors,2);eq(health.lastStage,'history:player');eq(health.lastTime,102)
+ assert(not health.lastError:find('[|%c]'));health.stages['history:player'].errors=999;health.errors=999
+ eq(n.GetRefreshDiagnostics().errors,2);eq(n.GetRefreshDiagnostics().stages['history:player'].errors,2)
+end)
+test('boss scanner faults never freeze HUD and direct events remain isolated',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);local display={};local sends=0
+ SendChatMessage=function() sends=sends+1 end
+ n.UI={Tick=function() display.forces=n.FormatForces(r);display.elapsed=n.Elapsed(r) end}
+ s.units.target={name='Trash',dead=false};n.MatchRequiredBoss=function() error('scan|failure\nline') end
+ s.clock=101;s.tick();eq(display.elapsed,1);s:kill(1);eq(display.forces,'0.5%')
+ s.event(nil,'UNIT_HEALTH','target');s.event(nil,'PLAYER_TARGET_CHANGED');s.clock=102;s.tick()
+ eq(display.elapsed,2);eq(sends,0);eq(n.GetRefreshDiagnostics().stages.bossScan.errors,4)
+end)
+test('debug reports stored HUD before and after refresh plus secret-safe cumulative faults',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);local messages={};local display={forces=37,lastUpdated=90,text='stored HUD'};local args
+ n.UI={Tick=function() display={forces=n.ForcesPercent(r),lastUpdated=s.clock,text=n.FormatForces(r)} end,GetDisplayDiagnostics=function() return display end}
+ eq(n.SafeRefresh('optional',function(...) args={n=select('#',...),...} end,1,nil,3),true);eq(args.n,3);eq(args[3],3)
+ eq(n.SafeRefresh('restricted',function() error(secret) end),false)
+ eq(n.GetRefreshDiagnostics().lastError,'restricted error');eq(n.GetRefreshDiagnostics().lastStage,'restricted')
+ n.SafeRefresh('object',function() error(setmetatable({},{__tostring=function() error('must not stringify') end})) end)
+ eq(n.GetRefreshDiagnostics().lastError,'unavailable error')
+ n.SafeRefresh('long',function() error(string.rep('x',200)..'|\n') end)
+ assert(#n.GetRefreshDiagnostics().lastError<=160)
+ DEFAULT_CHAT_FRAME={AddMessage=function(_,m) messages[#messages+1]=m end}
+ SlashCmdList.FOREVERPLUS('debug');DEFAULT_CHAT_FRAME=nil
+ local out=table.concat(messages,'\n');assert(out:find('HUD before refresh: forces 37',1,true),out)
+ assert(out:find('HUD after refresh: forces 0',1,true),out);assert(out:find('stored HUD',1,true),out)
+ assert(out:find('Refresh health: errors 3',1,true),out);assert(out:find('last stage long',1,true),out)
+ n.UI.Tick=function() error(secret) end;s.tick();eq(n.GetRefreshDiagnostics().lastStage,'ui');eq(n.GetRefreshDiagnostics().errors,4)
+end)
+test('boss deductions immediately refresh HUD even when report UI fails without public sends',function()
+ local s,n=boot();s.group=true;s.units.party1={name='Friend',realm='Realm',player=true}
+ local r=n.StartRun(n.DUNGEONS.rfc);local display={};local sends=0
+ SendChatMessage=function() sends=sends+1 end
+ n.UI={Tick=function() display.forces=n.FormatForces(r);display.bosses=n.CountBossesDown(r) end,Show=function() error('report show failed') end,RefreshBossReport=function() error('report failed') end}
+ for i=1,4 do s:kill(i) end;eq(display.forces,'2%')
+ s.event(nil,'BOSS_KILL',101,'Oggleflint');eq(display.forces,'1.5%');eq(display.bosses,1)
+ eq(ForeverPlusDB.currentRun.kills,3);eq(sends,0);assert(n.GetPendingBossReport())
+ assert(n.GetRefreshDiagnostics().errors>=1)
+end)
+test('history event faults cannot prevent independent boss scan or later HUD updates',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);local display={}
+ n.History={UnitState=function() error('history event failure') end}
+ n.UI={Tick=function() display.forces=n.FormatForces(r);display.elapsed=n.Elapsed(r) end}
+ s.units.target={name='Oggleflint',dead=true,hostile=true}
+ s.event(nil,'UNIT_HEALTH','target');eq(n.CountBossesDown(r),1)
+ s:kill(1);s:kill(2);eq(display.forces,'0.5%')
+ n.History.UnitState=function() error(secret) end
+ s.event(nil,'PLAYER_ALIVE');s.event(nil,'PLAYER_UNGHOST');s.clock=105;s.tick();eq(display.elapsed,5)
+ assert(n.GetRefreshDiagnostics().errors>=3);eq(n.GetRefreshDiagnostics().lastError,'restricted error')
+end)
+test('legacy fifty kills resume as twenty five percent without reopening completed runs',function()
+ for _,complete in ipairs({false,true}) do
+  local s,n=boot({currentRun={key='rfc',instanceID=389,startUnix=99900,kills=50,forces=100,complete=complete,sec=75,chest=3,bossDown={}}})
+  s:entry();local r=n.GetRun();eq(r.kills,50);eq(r.forcesBaseline,50);eq(n.ForcesPercent(r),25)
+  eq(r.complete,complete);eq(r.active,not complete);eq(ForeverPlusDB.currentRun.kills,50)
+  if complete then s:kill(1);eq(r.kills,50);eq(n.Elapsed(r),75) else
+   s:kill(1);eq(r.kills,51);eq(n.FormatForces(r),'25.5%')
+   local db=ForeverPlusDB;s,n=boot(db);s:entry();r=n.GetRun();eq(r.kills,51);eq(n.FormatForces(r),'25.5%')
+   SlashCmdList.FOREVERPLUS('reset');eq(r.kills,0);eq(r.nativeCount,0);eq(r.forcesBaseline,0);eq(n.FormatForces(r),'0%')
+  end
+ end
+end)
+test('fractional local boss messages and debug do not truncate forces or flood on refresh errors',function()
+ local s,n=boot();local messages={};local sends=0
+ DEFAULT_CHAT_FRAME={AddMessage=function(_,m) messages[#messages+1]=m end};SendChatMessage=function() sends=sends+1 end
+ local r=n.StartRun(n.DUNGEONS.rfc);for i=1,4 do s:kill(i) end;s.event(nil,'BOSS_KILL',101,'Oggleflint')
+ assert(table.concat(messages,'\n'):find('Forces 1.5%',1,true))
+ local before=#messages;n.UI={Tick=function() error('broken|refresh\nline') end}
+ for i=1,10 do s.clock=s.clock+1;s.tick() end;eq(#messages,before);eq(sends,0)
+ SlashCmdList.FOREVERPLUS('debug');assert(table.concat(messages,'\n'):find('Forces 1.5% (3 kills)',1,true))
+ DEFAULT_CHAT_FRAME=nil
+end)
+test('global half percent boundaries preserve exact fractional formatting',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc)
+ local expected={[1]={0.5,'0.5%'},[2]={1,'1%'},[199]={99.5,'99.5%'},[200]={100,'100%'},[201]={100,'100%'}}
+ for i=1,201 do s:kill(i);if expected[i] then eq(n.ForcesPercent(r),expected[i][1]);eq(n.FormatForces(r),expected[i][2]) end end
+ eq(n.FormatForces(nil),'0%')
+end)
 test('opaque native notifications count without GUID evidence',function()
  local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc)
  UnitGUID=function() error('native policy must not query GUID') end
  for i=1,24 do s.event(nil,'PARTY_KILL',secret,secret) end
- eq(r.kills,24);eq(n.ForcesPercent(r),48)
+ eq(r.kills,24);eq(n.ForcesPercent(r),12)
  s.event(nil,'PARTY_KILL');eq(r.kills,25)
 end)
 test('only native events increment forces not legacy deaths or scans',function()
@@ -205,7 +291,7 @@ test('exact names explicit aliases conflicting IDs and no empty roster completio
  eq(n.KeyFromKill(999,'Archmage Arugal'),nil)
  eq(n.IsLastBossOf(n.DUNGEONS.sfk,999,'Arugal'),false)
  for _,d in ipairs({n.DUNGEONS.shapers,{bosses={}},{bosses={{n='A'}},manual=true},{bosses={},unknown=true}}) do
-  eq(n.ObjectivesMet({dungeon=d,kills=50,bossDown={}}),false)
+  eq(n.ObjectivesMet({dungeon=d,kills=200,bossDown={}}),false)
  end
  s.name=''; s.id=999; local d=n.ResolveDungeon(); assert(d.unknown)
  s.name='The Deadmines Annex'; d=n.ResolveDungeon(); assert(d.unknown)
@@ -225,13 +311,13 @@ test('malformed saved migration preserves valid local bests',function()
  s,n=boot('bad'); s:entry(); assert(n.GetRun())
  s,n=boot({currentRun={key='rfc',startUnix=100000,kills=0/0,deaths=-5,bossDown='bad',killSeen=1}}); s:entry(); eq(n.GetRun().kills,0); eq(n.GetRun().deaths,0)
 end)
-test('completion requires all bosses plus fifty and preserves overtime demo isolation',function()
+test('completion requires all bosses plus two hundred and preserves overtime demo isolation',function()
  local s,n=boot(); local shares=0; n.Comm={QueueShare=function() shares=shares+1 end}
  local r=n.StartRun(n.DUNGEONS.rfc)
  for _,b in ipairs(r.dungeon.bosses) do s:kill('boss');s.event(nil,'BOSS_KILL',0,b.n) end
  eq(r.kills,0); eq(r.complete,false)
- for i=1,49 do s:kill(i) end; eq(r.complete,false)
- s.clock=3800; s:kill(50); eq(r.complete,true); eq(r.chest,0); eq(n.GetBest('rfc').sec,3700); eq(shares,1)
+ for i=1,199 do s:kill(i) end; eq(r.complete,false)
+ s.clock=3800; s:kill(200); eq(r.complete,true); eq(r.chest,0); eq(n.GetBest('rfc').sec,3700); eq(shares,1)
  local clock,over=n.FormatClock(3700); eq(clock,'+1:40'); eq(over,true)
  n.ToggleDemo(); n.CompleteRun('demo'); eq(n.GetBest('demo'),nil); eq(shares,1)
  n.ToggleDemo(); n.CheckZone(); assert(not n.GetRun() or not n.GetRun().active)
@@ -321,7 +407,7 @@ local function boss(s,name) s.event(nil,'BOSS_KILL',101,name or 'Oggleflint') en
 test('boss and deferred timers only prepare while hardware click sends one frozen snapshot',function()
  local s,n=boot();reportParty(s);local calls,delivered=0,0;local timers={};local hardware=false
  C_Timer.After=function(_,fn) timers[#timers+1]=fn end
- SendChatMessage=function(text,ch) calls=calls+1;if hardware then delivered=delivered+1 end;eq(ch,'PARTY');assert(text:find('59:00',1,true));assert(text:find('Forces 6%',1,true)) end
+ SendChatMessage=function(text,ch) calls=calls+1;if hardware then delivered=delivered+1 end;eq(ch,'PARTY');assert(text:find('59:00',1,true));assert(text:find('Forces 1.5%',1,true));assert(text:find('at boss death',1,true)) end
  n.StartRun(n.DUNGEONS.rfc);s.clock=160;for i=1,4 do s:kill(i) end;boss(s)
  eq(calls,0);local pending=assert(n.GetPendingBossReport());eq(pending.count,1);eq(pending.canSend,true)
  pending.text='mutated';eq(n.GetPendingBossReport().text~=pending.text,true)
@@ -409,11 +495,11 @@ test('completed report survives same-party zoning but explicit abandon still cle
  eq(n.GetPendingBossReport().id,id);eq(n.SendPendingBossReport(),true);eq(calls,1)
  s.kind='party';n.CheckZone();boss(s);n.CompleteRun('manual');n.AbandonRun('slash');eq(n.GetPendingBossReport(),nil)
 end)
-test('pending readiness includes available API and release version is 1.2.1',function()
+test('pending readiness includes available API and release version is 1.3.0',function()
  local s,n=boot();reportParty(s);n.StartRun(n.DUNGEONS.rfc);boss(s)
  eq(n.GetPendingBossReport().canSend,false);eq(n.SendPendingBossReport(),false);assert(n.GetPendingBossReport())
  C_ChatInfo={SendChatMessage=function() end};eq(n.GetPendingBossReport().canSend,true)
- eq(n.SendPendingBossReport(),true);eq(n.ver,'1.2.1')
+ eq(n.SendPendingBossReport(),true);eq(n.ver,'1.3.0')
 end)
 test('known party categories route frozen lines and secret category preparation fails closed',function()
  for _,mode in ipairs({'constant','enum','absent','secret','secretMembership'}) do
@@ -462,9 +548,9 @@ test('diagnostics expose prepared manual action and never claim confirmed delive
 end)
 test('final automatic completion keeps boss-time after-deduction report available',function()
  local s,n=boot();reportParty(s);local sent={};SendChatMessage=function(text) sent[#sent+1]=text end
- local r=n.StartRun(n.DUNGEONS.rfc);for i=1,50 do s:kill(i) end
+ local r=n.StartRun(n.DUNGEONS.rfc);for i=1,200 do s:kill(i) end
  for i,b in ipairs(r.dungeon.bosses) do s.clock=100+i*10;s:kill('boss');s.event(nil,'BOSS_KILL',100+i,b.n) end
- eq(r.complete,true);eq(r.kills,50);eq(#sent,0);eq(n.GetPendingBossReport().count,4)
+ eq(r.complete,true);eq(r.kills,200);eq(#sent,0);eq(n.GetPendingBossReport().count,4)
  s.clock=1000;for i=1,4 do eq(n.SendPendingBossReport(),true) end
  assert(sent[4]:find('59:20',1,true));assert(sent[4]:find('Forces 100%',1,true));assert(sent[4]:find('Bosses 4/4',1,true))
 end)
@@ -561,17 +647,17 @@ test('opaque boss receipts exclude kills without inspecting name or encounter ID
  s.event(nil,'ENCOUNTER_END',secret,secret,1,5,0);eq(r.bossDeductions,1)
  s.event(nil,'BOSS_KILL',0,'');s.event(nil,'BOSS_KILL',0,'');eq(r.bossDeductions,3);eq(r.kills,0)
 end)
-test('last boss event ordering never completes at forty nine trash kills',function()
+test('last boss event ordering never completes at one hundred ninety nine trash kills',function()
  for _,first in ipairs({true,false}) do
   local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc)
-  for i=1,49 do s:kill(i) end
+  for i=1,199 do s:kill(i) end
   for i,b in ipairs(r.dungeon.bosses) do
    if first then s:kill('boss') end
    s.event(nil,'BOSS_KILL',0,b.n)
    if not first then s:kill('boss') end
    eq(r.complete,false)
   end
-  eq(r.kills,49);s:kill('fifty');eq(r.complete,true)
+  eq(r.kills,199);eq(n.FormatForces(r),'99.5%');s:kill('two hundred');eq(r.complete,true)
  end
 end)
 test('ledger reload persists exclusion and reset clears all new counters',function()

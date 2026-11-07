@@ -6,7 +6,7 @@ ns.PLUS3 = 2160 -- 36:00
 ns.PLUS2 = 2880 -- 48:00
 ns.PLUS1 = 3600 -- 60:00
 ns.PREFIX = "ForeverPlus" -- addon comm prefix, <= 16 chars
-ns.FORCE_PER_KILL = 2
+ns.FORCE_PER_KILL = 0.5
 
 -- Recommended level bands: installed ForeverGuide/DungeonData.lua, not admission limits.
 -- Clear = every standard boss in `bosses` plus 100% enemy forces.
@@ -880,9 +880,14 @@ end
 
 function ns.ForcesPercent(run)
     if not run then return 0 end
-    local pct = (run.kills or 0) * (ns.FORCE_PER_KILL or 2)
+    local pct = (run.kills or 0) * (ns.FORCE_PER_KILL or 0.5)
     if pct > 100 then return 100 end
     return pct
+end
+
+function ns.FormatForces(run)
+    local pct = ns.ForcesPercent(run)
+    return string.format(pct % 1 == 0 and "%.0f%%" or "%.1f%%", pct)
 end
 
 function ns.ObjectivesMet(run)

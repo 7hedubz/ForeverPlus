@@ -189,7 +189,7 @@ function UI.Init()
     frame:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
         GameTooltip:AddLine("ForeverPlus", 1, 0.82, 0.2)
-        GameTooltip:AddLine("Gag Mythic+ timer. All standard bosses + 50 mobs (2% each).", 1, 1, 1, true)
+        GameTooltip:AddLine("Gag Mythic+ timer. All standard bosses + 200 mobs (0.5% each).", 1, 1, 1, true)
         GameTooltip:AddLine("Drag to move. Right-click for dungeon history.", 0.7, 0.7, 0.7, true)
         GameTooltip:AddLine("/fplus complete to force-end if a kill isn't seen.", 0.7, 0.7, 0.7, true)
         GameTooltip:Show()
@@ -264,7 +264,7 @@ end
 function UI.ReportTooltip(anchor)
     local pending = ns.GetPendingBossReport and ns.GetPendingBossReport()
     GameTooltip:SetOwner(anchor, "ANCHOR_BOTTOM")
-    GameTooltip:AddLine("Boss report", 1, 0.82, 0.2)
+    GameTooltip:AddLine("Boss report (at boss death)", 1, 0.82, 0.2)
     if pending then
         GameTooltip:AddLine(SafeText(pending.text), 1, 1, 1, true)
         GameTooltip:AddLine("Channel: " .. SafeText(pending.channel), 0.7, 0.7, 0.7)
@@ -684,89 +684,87 @@ function UI.OnComplete(run)
     UI.RefreshBoard()
 end
 
-function UI.Tick()
-    UI.RefreshBossReport()
-    UI.RefreshVote()
-    if frame then
-        local current = ns.GetRun()
-        frame.abandonButton:SetEnabled(current ~= nil and current.active == true and not current.complete and not current.practice)
-    end
-    if board and board:IsShown() and ns.Sync and ns.Sync.Status then
-        board.syncStatus:SetText(SafeText(ns.Sync.Status()))
-    end
+local displayed = {forces=nil,lastUpdated=nil,text=nil}
+local function RefreshStage(stage, fn)
+    if ns.SafeRefresh then return ns.SafeRefresh(stage, fn) end
+    return pcall(fn) -- Standalone UI tests/load order before core initialization.
+end
+
+function UI.GetDisplayDiagnostics()
+    return {forces=displayed.forces,lastUpdated=displayed.lastUpdated,text=displayed.text,
+        shown=frame ~= nil and frame:IsShown() or false}
+end
+
+local function RefreshHUD()
     if not frame then return end
-    if hideAt > 0 and GetTime() > hideAt and (not ns.GetRun() or not ns.GetRun().active) then
-        frame:Hide()
-        hideAt = 0
+    local run = ns.GetRun()
+    if hideAt > 0 and GetTime() > hideAt and (not run or not run.active) then
+        frame:Hide(); hideAt = 0
     end
     if not frame:IsShown() then return end
-
-    local run = ns.GetRun()
     if not run then
         frame.dungeon:SetText("No active key")
-        frame.clock:SetText("60:00")
-        frame.clock:SetTextColor(0.7, 0.7, 0.7)
-        frame.chest:SetText("")
-        frame.chest:SetTextColor(1, 1, 1)
+        frame.clock:SetText("60:00"); frame.clock:SetTextColor(0.7, 0.7, 0.7)
+        frame.chest:SetText(""); frame.chest:SetTextColor(1, 1, 1)
         frame.title:SetText("FOREVER +1")
-        frame.best:SetText("Best: —")
-        frame.deaths:SetText("Deaths: 0")
+        frame.best:SetText("Best: —"); frame.deaths:SetText("Deaths: 0")
         frame.obj:SetText("Bosses 0/0     Forces 0%")
-        frame.fill:SetWidth(1)
-        frame.fill:SetVertexColor(0.7, 0.7, 0.7)
+        frame.fill:SetWidth(1); frame.fill:SetVertexColor(0.7, 0.7, 0.7)
+        displayed.forces, displayed.lastUpdated, displayed.text = 0, GetTime(), "Bosses 0/0     Forces 0%"
         return
     end
-
     local sec = run.sec or ns.Elapsed(run)
-    local clock, over = ns.FormatClock(sec, ns.LIMIT)
+    local clock = ns.FormatClock(sec, ns.LIMIT)
     local cr, cg, cb = ColorFor(sec)
-    frame.clock:SetText(clock)
-    frame.clock:SetTextColor(cr, cg, cb)
-    frame.dungeon:SetText(run.name or "")
-    frame.title:SetText("FOREVER +1")
-
+    frame.clock:SetText(clock); frame.clock:SetTextColor(cr, cg, cb)
+    frame.dungeon:SetText(run.name or ""); frame.title:SetText("FOREVER +1")
     local chest = ns.ChestForTime(sec)
     if run.complete then
-        if chest > 0 then
-            frame.chest:SetText(string.format("|cff00ff96Timed  +%d|r", chest))
-        else
-            frame.chest:SetText("|cffff2020Depleted|r")
-        end
+        frame.chest:SetText(chest > 0 and string.format("|cff00ff96Timed  +%d|r", chest) or "|cffff2020Depleted|r")
     else
-        if chest > 0 then
-            frame.chest:SetText(string.format("+%d", chest))
-        else
-            frame.chest:SetText("|cffff2020DEPLETED|r")
-        end
+        frame.chest:SetText(chest > 0 and string.format("+%d", chest) or "|cffff2020DEPLETED|r")
         frame.chest:SetTextColor(cr, cg, cb)
     end
-
-    local b = ns.GetBest(run.key)
-    if b then
-        local delta = sec - b.sec
-        local sign = delta >= 0 and "+" or "-"
-        frame.best:SetText(string.format("Best %s  (%s%s)", ns.FormatTime(b.sec), sign, ns.FormatTime(math.abs(delta))))
-    else
-        frame.best:SetText("Best: —")
-    end
-    local deaths = ns.History and run.history and ns.History.TotalDeaths(run) or run.deaths or 0
-    frame.deaths:SetText("Deaths: " .. tostring(deaths))
-    if frame.obj then
-        local down, total = ns.CountBossesDown(run)
-        local fp = ns.ForcesPercent(run)
-        local manual = total == 0 or (run.dungeon and (run.dungeon.manual or run.dungeon.unknown))
-        local bcol = (not manual and down >= total) and "|cff00ff96" or "|cffffffff"
-        local fcol = (fp >= 100) and "|cff00ff96" or "|cffffffff"
-        if manual then
-            frame.obj:SetText(string.format("|cffffd200Bosses: manual|r     %sForces %d%%|r", fcol, fp))
-        else
-            frame.obj:SetText(string.format("%sBosses %d/%d|r     %sForces %d%%|r", bcol, down, total, fcol, fp))
-        end
-    end
-
-    local frac = math.min(1, sec / ns.LIMIT)
-    local w = 280 * frac
-    if w < 1 then w = 1 end
-    frame.fill:SetWidth(w)
+    local down, total = ns.CountBossesDown(run)
+    local fp = ns.ForcesPercent(run)
+    local percent = ns.FormatForces and ns.FormatForces(run) or string.format("%g%%", fp)
+    local manual = total == 0 or (run.dungeon and (run.dungeon.manual or run.dungeon.unknown))
+    local bcol = (not manual and down >= total) and "|cff00ff96" or "|cffffffff"
+    local fcol = fp >= 100 and "|cff00ff96" or "|cffffffff"
+    local objectives
+    if manual then objectives = string.format("|cffffd200Bosses: manual|r     %sForces %s|r", fcol, percent)
+    else objectives = string.format("%sBosses %d/%d|r     %sForces %s|r", bcol, down, total, fcol, percent) end
+    frame.obj:SetText(objectives)
+    displayed.forces, displayed.lastUpdated, displayed.text = fp, GetTime(), objectives
+    frame.fill:SetWidth(math.max(1, 280 * math.min(1, sec / ns.LIMIT)))
     frame.fill:SetVertexColor(cr, cg, cb)
+    -- Optional values cannot freeze the core timer and objectives above.
+    RefreshStage("hud-best", function()
+        local b = ns.GetBest(run.key)
+        if b then
+            local delta = sec - b.sec
+            frame.best:SetText(string.format("Best %s  (%s%s)", ns.FormatTime(b.sec), delta >= 0 and "+" or "-", ns.FormatTime(math.abs(delta))))
+        else frame.best:SetText("Best: —") end
+    end)
+    RefreshStage("hud-deaths", function()
+        local deaths = ns.History and run.history and ns.History.TotalDeaths(run) or run.deaths or 0
+        frame.deaths:SetText("Deaths: " .. tostring(deaths))
+    end)
+end
+
+function UI.Tick()
+    RefreshStage("hud", RefreshHUD)
+    RefreshStage("report-ui", UI.RefreshBossReport)
+    RefreshStage("vote-ui", UI.RefreshVote)
+    RefreshStage("abandon-ui", function()
+        if frame then
+            local current = ns.GetRun()
+            frame.abandonButton:SetEnabled(current ~= nil and current.active == true and not current.complete and not current.practice)
+        end
+    end)
+    RefreshStage("journal-status", function()
+        if board and board:IsShown() and ns.Sync and ns.Sync.Status then
+            board.syncStatus:SetText(SafeText(ns.Sync.Status()))
+        end
+    end)
 end

@@ -3,7 +3,7 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.2.1"
+ns.ver = "1.3.0"
 
 local LIMIT = ns.LIMIT
 local Secret = ns.IsSecret
@@ -14,6 +14,40 @@ end
 local function Count(v)
     if not Number(v) or v < 0 then return 0 end
     return math.floor(v)
+end
+-- Refresh faults are session-local and never print from timer/event callbacks.
+-- Do not tostring error objects: restricted values may not be inspected.
+local function RefreshText(value)
+    if Secret(value) then return "restricted error" end
+    if type(value) ~= "string" then return "unavailable error" end
+    return value:gsub("|", ""):gsub("%c", " "):sub(1, 160)
+end
+local refreshHealth = {errors=0, stages={}}
+function ns.SafeRefresh(stage, fn, ...)
+    local ok, err = pcall(fn, ...)
+    if not ok then
+        stage = RefreshText(stage)
+        local text = RefreshText(err)
+        local stamp = Read(GetTime)
+        if not Number(stamp) then stamp = nil end
+        refreshHealth.errors = refreshHealth.errors + 1
+        refreshHealth.lastStage, refreshHealth.lastError, refreshHealth.lastTime = stage, text, stamp
+        local item = refreshHealth.stages[stage] or {errors=0}
+        item.errors, item.lastError, item.lastTime = item.errors + 1, text, stamp
+        refreshHealth.stages[stage] = item
+    end
+    return ok
+end
+function ns.GetRefreshDiagnostics()
+    local result = {errors=refreshHealth.errors, lastStage=refreshHealth.lastStage,
+        lastError=refreshHealth.lastError, lastTime=refreshHealth.lastTime, stages={}}
+    for stage, item in pairs(refreshHealth.stages) do
+        result.stages[stage] = {errors=item.errors, lastError=item.lastError, lastTime=item.lastTime}
+    end
+    return result
+end
+local function RefreshHUD()
+    if ns.UI and type(ns.UI.Tick) == "function" then ns.SafeRefresh("ui", ns.UI.Tick) end
 end
 local function BoolMap(v)
     if type(v) ~= "table" or Secret(v) then return {} end
@@ -266,7 +300,7 @@ function ns.StartRun(dungeon, reason)
     Persist()
     if ns.UI then ns.UI.Show() end
     if not run.practice then
-        Print(string.format("Key started: |cffffd100%s|r — 1:00:00. Kill every standard boss and 50 mobs (2%% each) to time it.", run.name))
+        Print(string.format("Key started: |cffffd100%s|r — 1:00:00. Kill every standard boss and 200 mobs (0.5%% each) to time it.", run.name))
         if dungeon.manual then
             Print("Boss list is incomplete for this dungeon. Type |cffffd100/fplus complete|r if the tracker can't see a kill.")
         end
@@ -545,8 +579,8 @@ local function PostBossProgress(bossName, down, total)
     if Secret(bossName) or type(bossName) ~= "string" then bossName = "Boss" end
     bossName = bossName:gsub("[|%c]", "")
     local function message(name)
-        return string.format("ForeverPlus: %s down - %s - Forces %d%% - Bosses %d/%d.",
-            name, label, ns.ForcesPercent(run), down, total)
+        return string.format("ForeverPlus: %s down (at boss death) - %s - Forces %s - Bosses %d/%d.",
+            name, label, ns.FormatForces(run), down, total)
     end
     local text = message(bossName)
     if #text > 255 then text = message("Boss") end
@@ -554,8 +588,8 @@ local function PostBossProgress(bossName, down, total)
     bossReport.status = "prepared; awaiting manual click or /fplus report"
     pendingReports[#pendingReports + 1] = {id=reportID, text=text, channel=channel, status="prepared", run=run, generation=run.attemptGeneration, party=party}
     if ns.UI then
-        if type(ns.UI.Show) == "function" then ns.UI.Show() end
-        if type(ns.UI.RefreshBossReport) == "function" then ns.UI.RefreshBossReport() end
+        if type(ns.UI.Show) == "function" then ns.SafeRefresh("report-show", ns.UI.Show) end
+        if type(ns.UI.RefreshBossReport) == "function" then ns.SafeRefresh("report-ui", ns.UI.RefreshBossReport) end
     end
 end
 local function ReportAPI()
@@ -645,17 +679,22 @@ function ns.OnCreatureDead(guid, npcId, name, source, encounterID)
     if boss or source == "BOSS_KILL" or source == "ENCOUNTER_END" then
         ExcludeBoss(boss, name, source, encounterID)
     end
-    if boss and not ns.IsBossMarked(run, boss) then
+    local newBoss = boss and not ns.IsBossMarked(run, boss)
+    if newBoss then
         ns.MarkBoss(run, boss, npcId, name)
         if DB().currentRun then
             DB().currentRun.bossDown = run.bossDown
         end
-        local down, total = ns.CountBossesDown(run)
-        Print(string.format("%s down. Bosses %d/%d. Forces %d%%.", boss.n or name or "Boss", down, total, ns.ForcesPercent(run)))
-        PostBossProgress(boss.n or name, down, total)
     end
 
     Persist()
+    RefreshHUD()
+    if newBoss then
+        local down, total = ns.CountBossesDown(run)
+        Print(string.format("%s down. Bosses %d/%d. Forces %s.", boss.n or name or "Boss", down, total, ns.FormatForces(run)))
+        PostBossProgress(boss.n or name, down, total)
+    end
+
     if ns.ObjectivesMet(run) then
         ns.CompleteRun(name or "objectives", source)
     end
@@ -806,13 +845,19 @@ f:SetScript("OnEvent", function(_, event, ...)
 
     if event == "UNIT_HEALTH" or event == "UNIT_FLAGS" then
         local unit = ...
-        if ns.History then ns.History.UnitState(run,unit); Persist() end
-        if not Secret(unit) and type(unit) == "string" then ScanBossUnits(unit, true) end
+        if ns.History then
+            ns.SafeRefresh("history-unit", ns.History.UnitState, run, unit)
+            ns.SafeRefresh("historyPersist", Persist)
+        end
+        if not Secret(unit) and type(unit) == "string" then ns.SafeRefresh("bossScan", ScanBossUnits, unit, true) end
         return
     end
 
     if event == "PLAYER_ALIVE" or event == "PLAYER_UNGHOST" then
-        if ns.History then ns.History.UnitState(run,"player",true); Persist() end
+        if ns.History then
+            ns.SafeRefresh("history:player", ns.History.UnitState, run, "player", true)
+            ns.SafeRefresh("historyPersist", Persist)
+        end
         return
     end
 
@@ -831,7 +876,7 @@ f:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "PLAYER_TARGET_CHANGED" or event == "UPDATE_MOUSEOVER_UNIT" or event == "PLAYER_REGEN_ENABLED" then
-        ScanBossUnits()
+        ns.SafeRefresh("bossScan", ScanBossUnits)
         return
     end
 
@@ -839,8 +884,8 @@ f:SetScript("OnEvent", function(_, event, ...)
         or event == "UNIT_THREAT_LIST_UPDATE" or event == "UNIT_THREAT_SITUATION_UPDATE" then
         local unit = ...
         if not Secret(unit) and type(unit) == "string" then
-            ScanBossUnits(unit, true)
-            if event == "UNIT_TARGET" then ScanBossUnits(unit == "player" and "target" or (unit .. "target"), true) end
+            ns.SafeRefresh("bossScan", ScanBossUnits, unit, true)
+            if event == "UNIT_TARGET" then ns.SafeRefresh("bossScan", ScanBossUnits, unit == "player" and "target" or (unit .. "target"), true) end
         end
         return
     end
@@ -877,6 +922,7 @@ f:SetScript("OnEvent", function(_, event, ...)
         run.nativeCount = run.nativeCount + 1
         RecomputeForces(run)
         Persist()
+        RefreshHUD()
         if ns.ObjectivesMet(run) then ns.CompleteRun("objectives", "PARTY_KILL") end
         return
     end
@@ -909,12 +955,14 @@ C_Timer.NewTicker(0.1, function()
     if run and run.active and not run.complete then
         if ns.History and GetTime() >= partyScanAt then
             partyScanAt = GetTime() + 0.5
-            for _, unit in ipairs({"player", "party1", "party2", "party3", "party4"}) do ns.History.UnitState(run, unit) end
-            Persist()
+            for _, unit in ipairs({"player", "party1", "party2", "party3", "party4"}) do
+                ns.SafeRefresh("history:" .. unit, ns.History.UnitState, run, unit)
+            end
+            ns.SafeRefresh("historyPersist", Persist)
         end
-        ScanBossUnits()
+        ns.SafeRefresh("bossScan", ScanBossUnits)
     end
-    if ns.UI then ns.UI.Tick() end
+    RefreshHUD()
 end)
 
 function ns.ToggleDemo()
@@ -1041,11 +1089,35 @@ SlashCmdList.FOREVERPLUS = function(msg)
         return
     end
     if msg == "debug" then
+        local function HUDSnapshot(label)
+            local snapshot
+            if ns.UI and type(ns.UI.GetDisplayDiagnostics) == "function" then
+                ns.SafeRefresh("hud-diagnostics", function() snapshot = ns.UI.GetDisplayDiagnostics() end)
+            end
+            if Secret(snapshot) or type(snapshot) ~= "table" then
+                Print("HUD " .. label .. ": unavailable (no stored display snapshot).")
+                return
+            end
+            local function value(v)
+                if Number(v) then return tostring(v) end
+                if not Secret(v) and type(v) == "string" then return RefreshText(v) end
+                return "unavailable"
+            end
+            Print("HUD " .. label .. ": forces " .. value(snapshot.forces)
+                .. ", lastUpdated " .. value(snapshot.lastUpdated) .. ", text " .. value(snapshot.text)
+                .. ", shown " .. (not Secret(snapshot.shown) and type(snapshot.shown) == "boolean" and tostring(snapshot.shown) or "unavailable") .. ".")
+        end
+        HUDSnapshot("before refresh")
+        RefreshHUD()
+        HUDSnapshot("after refresh")
+        local health = ns.GetRefreshDiagnostics()
+        Print(string.format("Refresh health: errors %d; last stage %s, time %s, error %s.",
+            health.errors, health.lastStage or "none", health.lastTime and tostring(health.lastTime) or "unavailable", health.lastError or "none"))
         Print(string.format("Boss report: attempts %d, accepted %d, failures %d, skips %d; %s.",
             bossReport.attempts, bossReport.accepted, bossReport.failures, bossReport.skips, bossReport.status))
         local history = ns.History and run and run.history
-        Print(string.format("v%s | Forces %d%% (%d kills) | CLEU readable %d, empty/restricted %d, errors %d | live credits %d (session) | tracked players %d, party deaths %d.",
-            ns.ver, ns.ForcesPercent(run), run and run.kills or 0, diagnostics.cleu, diagnostics.empty, diagnostics.errors, diagnostics.liveCredits,
+        Print(string.format("v%s | Forces %s (%d kills) | CLEU readable %d, empty/restricted %d, errors %d | live credits %d (session) | tracked players %d, party deaths %d.",
+            ns.ver, ns.FormatForces(run), run and run.kills or 0, diagnostics.cleu, diagnostics.empty, diagnostics.errors, diagnostics.liveCredits,
             history and #history.players or 0, history and ns.History.TotalDeaths(run) or 0))
         Print(string.format("Run raw notifications %d, boss deductions %d, net kills %d (baseline %d).",
             run and run.nativeCount or 0, run and run.bossDeductions or 0,
