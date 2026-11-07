@@ -3,7 +3,7 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.3.1"
+ns.ver = "1.4.0"
 
 local LIMIT = ns.LIMIT
 local Secret = ns.IsSecret
@@ -161,7 +161,16 @@ local function ActivePartyRun()
     if run.instanceID and inst.instanceID and run.instanceID ~= inst.instanceID then return false end
     return dungeon.key == run.key or (run.instanceID and run.instanceID == inst.instanceID)
 end
-ns.IsRunInCurrentInstance = ActivePartyRun
+ns.IsRunInCurrentInstance = function(r)
+    if not r then return ActivePartyRun() end
+    if r.practice then return false end
+    local inst = ns.SafeInstance()
+    if not inst or inst.instanceType ~= "party" then return false end
+    local dungeon = ns.ResolveDungeon()
+    if not dungeon then return false end
+    if r.instanceID and inst.instanceID and r.instanceID ~= inst.instanceID then return false end
+    return dungeon.key == r.key or (r.instanceID and r.instanceID == inst.instanceID) or false
+end
 local function ExcludeBoss(boss, name, source, encounterID)
     local keys = {}
     if boss then keys[#keys + 1] = "boss:" .. boss.n
@@ -353,7 +362,7 @@ function ns.CompleteRun(bossName, source)
     Persist()
 
     local elapsedStr = ns.FormatTime(sec)
-    local clock, over = ns.FormatClock(sec, LIMIT)
+    local info = ns.NextChestInfo(sec)
     local chestTxt
     if chest >= 3 then
         chestTxt = "|cff00ff96+3|r"
@@ -367,8 +376,8 @@ function ns.CompleteRun(bossName, source)
 
     if run.practice then
         Print(string.format(
-            "Practice run |cffffd100%s|r finished in %s  %s. |cffaaaaaaNot saved.|r",
-            run.name, elapsedStr, chestTxt
+            "Practice run |cffffd100%s|r finished in %s  %s - %s. |cffaaaaaaNot saved.|r",
+            run.name, elapsedStr, chestTxt, info.text
         ))
         if ns.UI then ns.UI.OnComplete(run) end
         return
@@ -377,12 +386,9 @@ function ns.CompleteRun(bossName, source)
     local isNew, best = ns.SaveBest(run.key, sec, chest, run.name)
 
     Print(string.format(
-        "Cleared |cffffd100%s|r in |cff00ff96%s|r  %s  via %s.",
-        run.name, elapsedStr, chestTxt, bossName or source or "last boss"
+        "Cleared |cffffd100%s|r in |cff00ff96%s|r  %s - %s  via %s.",
+        run.name, elapsedStr, chestTxt, info.text, bossName or source or "last boss"
     ))
-    if over then
-        Print("Overtime was " .. clock .. " past the 1-hour deplete line. Time still counts.")
-    end
     if isNew then
         Print("|cff00ff96New personal best!|r")
         pcall(function()
@@ -574,10 +580,13 @@ local function PostBossProgress(bossName, down, total)
     if not party then ReportSkip("invalid party roster"); return end
     -- Preserve the oldest snapshots; overflow never triggers a send or burst.
     if #pendingReports >= 8 then ReportSkip("pending queue full"); return end
-    local clock, overtime = ns.FormatClock(Elapsed(run), LIMIT)
-    local label = overtime and ("Overtime " .. clock) or ("Time remaining " .. clock)
+    local sec = Elapsed(run)
+    local info = ns.NextChestInfo(sec)
+    local tier = info.chest > 0 and ("+" .. info.chest) or "depleted"
+    local label = "Elapsed " .. ns.FormatTime(sec) .. " (" .. tier .. ") - " .. info.text
     if Secret(bossName) or type(bossName) ~= "string" then bossName = "Boss" end
-    bossName = bossName:gsub("[|%c]", "")
+    bossName = bossName:gsub("[^ -~]", ""):gsub("|", "")
+    if bossName == "" then bossName = "Boss" end
     local function message(name)
         return string.format("ForeverPlus: %s down (at boss death) - %s - Forces %s - Bosses %d/%d.",
             name, label, ns.FormatForces(run), down, total)
@@ -958,6 +967,7 @@ C_Timer.NewTicker(0.1, function()
             for _, unit in ipairs({"player", "party1", "party2", "party3", "party4"}) do
                 ns.SafeRefresh("history:" .. unit, ns.History.UnitState, run, unit)
             end
+            if type(ns.History.PollNative) == "function" then ns.SafeRefresh("history-native", ns.History.PollNative, run) end
             ns.SafeRefresh("historyPersist", Persist)
         end
         ns.SafeRefresh("bossScan", ScanBossUnits)
@@ -1116,6 +1126,7 @@ SlashCmdList.FOREVERPLUS = function(msg)
         Print(string.format("Boss report: attempts %d, accepted %d, failures %d, skips %d; %s.",
             bossReport.attempts, bossReport.accepted, bossReport.failures, bossReport.skips, bossReport.status))
         local history = ns.History and run and run.history
+        if ns.History and ns.History.NativeStatus then Print((ns.History.NativeStatus(run))) end
         Print(string.format("v%s | Forces %s (%d kills) | CLEU readable %d, empty/restricted %d, errors %d | live credits %d (session) | tracked players %d, party deaths %d.",
             ns.ver, ns.FormatForces(run), run and run.kills or 0, diagnostics.cleu, diagnostics.empty, diagnostics.errors, diagnostics.liveCredits,
             history and #history.players or 0, history and ns.History.TotalDeaths(run) or 0))

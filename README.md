@@ -1,10 +1,10 @@
 # ForeverPlus
 
-Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.3.1**, Interface `16001` (Camelot).
+Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.4.0**, Interface `16001` (Camelot).
 
 ## Install / upgrade
 
-Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.3.0 to 1.3.1** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
+Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.3.1 to 1.4.0** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
 
 ## Dungeon journal
 
@@ -21,6 +21,14 @@ New completed runs are recorded, including overtime and manually completed runs.
 **Old personal-best entries cannot be turned into detailed runs:** previous versions did not store the roster or combat totals. No historical stats are invented.
 
 ### How combat stats work
+
+ForeverPlus feature-detects the native `C_DamageMeter` session/source API used by the installed Forever-aware Details build. It copies only public finite per-player damage/healing amounts from eligible run-bounded sessions, with a persisted session ledger rather than repeatedly adding cumulative snapshots. Preexisting sessions are excluded; missing baselines, restricted values, evicted/reset sessions and unresolved boundaries remain gaps, not guessed damage. Native samples and legacy combat-event observations are not blindly summed together.
+
+Availability is tracked separately: **— means unavailable/unknown**, while **0 means a readable measured zero**. Resuming or encountering restricted events no longer converts missing stats into apparent measured zeros. Previously saved all-zero records without evidence are shown conservatively as unavailable; this cannot reconstruct combat data that was never captured. Shared legacy records do not carry all local availability flags, so zero values may remain unknown after sync.
+
+Party-unit death/resurrection tracking may use exact public realm-qualified player names when GUIDs are restricted, without inspecting or reconstructing hidden GUIDs. It retains per-player deduplication, baselines and saved counts across reload and rejects conflicting readable identities or unavailable public names/dead states.
+
+Native API presence is not proof its values are readable. If the server keeps amounts secret or the API is absent, no authoritative readable fallback is established: combat stats remain unavailable. Completed records freeze at the run boundary; later fights are never imported as a substitute for missing run data. `/fplus debug` exposes provider/availability status for the next in-game check.
 
 The addon snapshots group members, including members who do not have ForeverPlus, and records the combat events this client can observe. Damage excludes overkill, healing excludes overhealing, known pets are attributed to their owners, and duplicate death notifications are deduplicated. Roster changes are retained within the run's participant limit.
 
@@ -43,7 +51,9 @@ Example: you record a dungeon with a friend who has no addon. After they install
 
 ## Timer rules
 
-Enter a 5-man dungeon to start a one-hour timer. Rewards are **+3 through 36:00**, **+2 through 48:00**, **+1 through 60:00**. Overtime keeps counting and depleted completions still record a time.
+Enter a 5-man dungeon to start an **elapsed-time stopwatch**, not a time-remaining countdown. The HUD shows how long the attempt has taken, including unsigned `1:01:00` beyond one hour, and freezes the duration when completed. Rewards are unchanged: **+3 through 36:00**, **+2 through 48:00**, **+1 through 60:00**. Depleted completions still record elapsed time.
+
+A separate HUD line shows the improvement needed for the **next better tier**: +1 → +2 → +3. At **38:36**, the run is +2 and needs **2:36 faster for +3**; at 49:00 it needs 1:00 faster for +2; at 1:01:00 it needs 1:00 faster for +1. +3 is labeled the highest tier, with no nonexistent +4 target. Exact thresholds remain inclusive; fractional misses round the required improvement up to a positive whole second. While active these are current pace comparisons, not promised final rewards. Completed-run journal details and local completion messages include the same comparison.
 
 Automatic completion requires **all configured required bosses plus 100% enemy forces**: each native party-kill notification contributes 1.2%, with recognized bosses deducted (84 net non-boss notifications). Bosses do not contribute forces. Empty/unverified rosters, such as Shaper's Terrace and unknown dungeons, are manual-only. If a required kill is unavailable to the client, `/fplus complete` is the explicit override.
 
@@ -81,7 +91,7 @@ A flat 84-kill requirement may be unattainable on short dungeons, individual win
 
 ### Click-to-send boss reports
 
-Each newly recorded required boss **prepares** a one-line snapshot: boss name, time remaining/overtime, Forces % after boss deduction, and boss progress. It does **not** call public chat from the boss event, a timer, OnUpdate, or a combat-end callback. The user reproduced public guild chat delivering from an immediate `/run` but silently not delivering after `C_Timer.After`, despite both returning `pcall: true, result: nil`. This points to the player-action context; it is not proof of all server permission/channel rules.
+Each newly recorded required boss **prepares** a one-line snapshot: boss name, elapsed time, the current chest tier and improvement needed for the next better tier, Forces % after boss deduction, and boss progress. It does **not** call public chat from the boss event, a timer, OnUpdate, or a combat-end callback. The user reproduced public guild chat delivering from an immediate `/run` but silently not delivering after `C_Timer.After`, despite both returning `pcall: true, result: nil`. This points to the player-action context; it is not proof of all server permission/channel rules.
 
 The HUD opens with **Send report (N)** ready. Click it **out of combat** to attempt one report synchronously in that button's click handler; alternatively use **minimap → Send boss report** or **`/fplus report`** directly in game chat. One player action sends one pending line, not a multi-line burst. PARTY is used normally, INSTANCE_CHAT for a confirmed instance-category group. The legacy global API is preferred, with the modern namespace as an availability fallback, matching the successful direct test. There is no automatic retry or second-API attempt.
 

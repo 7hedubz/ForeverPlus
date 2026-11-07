@@ -48,6 +48,45 @@ local function boot(db)
  return s,ns
 end
 local function test(name,fn) tests[#tests+1]={name,fn} end
+test('next better chest uses inclusive cutoffs and positive ceiling gaps',function()
+ local _,n=boot()
+ for _,case in ipairs({
+  {0,3,nil,0,'+3 is the highest tier'},
+  {2160,3,nil,0,'+3 is the highest tier'},
+  {2160.001,2,3,1,'0:01 faster for +3'},
+  {2880,2,3,720,'12:00 faster for +3'},
+  {2880.001,1,2,1,'0:01 faster for +2'},
+  {3600,1,2,720,'12:00 faster for +2'},
+  {3600.001,0,1,1,'0:01 faster for +1'},
+  {2316,2,3,156,'2:36 faster for +3'},
+  {2940,1,2,60,'1:00 faster for +2'},
+  {3660,0,1,60,'1:00 faster for +1'},
+ }) do
+  local info=n.NextChestInfo(case[1]);eq(info.chest,case[2]);eq(info.nextChest,case[3]);eq(info.fasterSeconds,case[4]);eq(info.text,case[5])
+ end
+end)
+test('invalid elapsed inputs clamp to zero before comparisons or formatting',function()
+ local _,n=boot()
+ local guarded=setmetatable({}, {__lt=function() error('secret compare') end,__le=function() error('secret compare') end,__tostring=function() error('secret stringify') end})
+ local original=issecretvalue;issecretvalue=function(v) return rawequal(v,guarded) or original(v) end
+ for _,v in ipairs({false,'2316',{},secret,guarded,0/0,math.huge,-math.huge,-1}) do
+  local info=n.NextChestInfo(v);eq(info.chest,3);eq(info.nextChest,nil);eq(info.fasterSeconds,0);eq(info.text,'+3 is the highest tier')
+  eq(n.FormatTime(v),'0:00');eq(n.ChestForTime(v),3)
+ end
+ eq(n.NextChestInfo(nil).chest,3);eq(n.FormatTime(nil),'0:00');eq(n.ChestForTime(nil),3)
+end)
+test('completion prints actual unsigned elapsed plus immediately better tier for real and practice runs',function()
+ for _,practice in ipairs({false,true}) do
+  for _,case in ipairs({{2316,'38:36','2:36 faster for +3'},{2940,'49:00','1:00 faster for +2'},{3660,'1:01:00','1:00 faster for +1'},{2160,'36:00','+3 is the highest tier'}}) do
+   local s,n=boot();local messages={};DEFAULT_CHAT_FRAME={AddMessage=function(_,m) messages[#messages+1]=m end}
+   if practice then n.ToggleDemo() else n.StartRun(n.DUNGEONS.rfc) end
+   messages={};s.clock=n.GetRun().startGetTime+case[1];n.CompleteRun('manual')
+   local out=table.concat(messages,'\n');assert(out:find(case[2],1,true),out);assert(out:find(case[3],1,true),out)
+   assert(not out:find('Overtime',1,true));assert(not out:find('Time remaining',1,true));assert(not out:find('+1:00',1,true))
+   DEFAULT_CHAT_FRAME=nil
+  end
+ end
+end)
 test('attempt generation changes on same-second resets and new attempts only',function()
  local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);local generation=r.attemptGeneration
  assert(type(generation)=='number','new run needs a local attempt generation')
@@ -422,10 +461,20 @@ local function reportParty(s)
  s.group=true;s.units.party1={name='Friend',realm='OtherRealm',player=true}
 end
 local function boss(s,name) s.event(nil,'BOSS_KILL',101,name or 'Oggleflint') end
+test('boss reports freeze elapsed tier and next better gap at death with ASCII payloads',function()
+ for _,case in ipairs({{2316,'Elapsed 38:36 (+2) - 2:36 faster for +3'},{2940,'Elapsed 49:00 (+1) - 1:00 faster for +2'},{3660,'Elapsed 1:01:00 (depleted) - 1:00 faster for +1'}}) do
+  local s,n=boot();reportParty(s);local sent={};SendChatMessage=function(text) sent[#sent+1]=text end
+  local r=n.StartRun(n.DUNGEONS.rfc);r.dungeon.bosses[1].n='B\195\182ss|\n'
+  s.clock=100+case[1];boss(s,r.dungeon.bosses[1].n)
+  local p=assert(n.GetPendingBossReport());assert(p.text:find(case[2],1,true),p.text);assert(not p.text:find('[\128-\255|%c]'));assert(#p.text<=255)
+  s.clock=s.clock+1000;s:kill(1);s.tick();eq(#sent,0);eq(n.GetPendingBossReport().text,p.text)
+  eq(n.SendPendingBossReport(),true);eq(#sent,1);eq(sent[1],p.text)
+ end
+end)
 test('boss and deferred timers only prepare while hardware click sends one frozen snapshot',function()
  local s,n=boot();reportParty(s);local calls,delivered=0,0;local timers={};local hardware=false
  C_Timer.After=function(_,fn) timers[#timers+1]=fn end
- SendChatMessage=function(text,ch) calls=calls+1;if hardware then delivered=delivered+1 end;eq(ch,'PARTY');assert(text:find('59:00',1,true));assert(text:find('Forces 3.6%',1,true));assert(text:find('at boss death',1,true)) end
+ SendChatMessage=function(text,ch) calls=calls+1;if hardware then delivered=delivered+1 end;eq(ch,'PARTY');assert(text:find('Elapsed 1:00 (+3) - +3 is the highest tier',1,true));assert(text:find('Forces 3.6%',1,true));assert(text:find('at boss death',1,true)) end
  n.StartRun(n.DUNGEONS.rfc);s.clock=160;for i=1,4 do s:kill(i) end;boss(s)
  eq(calls,0);local pending=assert(n.GetPendingBossReport());eq(pending.count,1);eq(pending.canSend,true)
  pending.text='mutated';eq(n.GetPendingBossReport().text~=pending.text,true)
@@ -513,11 +562,11 @@ test('completed report survives same-party zoning but explicit abandon still cle
  eq(n.GetPendingBossReport().id,id);eq(n.SendPendingBossReport(),true);eq(calls,1)
  s.kind='party';n.CheckZone();boss(s);n.CompleteRun('manual');n.AbandonRun('slash');eq(n.GetPendingBossReport(),nil)
 end)
-test('pending readiness includes available API and release version is 1.3.1',function()
+test('pending readiness includes available API and release version is 1.4.0',function()
  local s,n=boot();reportParty(s);n.StartRun(n.DUNGEONS.rfc);boss(s)
  eq(n.GetPendingBossReport().canSend,false);eq(n.SendPendingBossReport(),false);assert(n.GetPendingBossReport())
  C_ChatInfo={SendChatMessage=function() end};eq(n.GetPendingBossReport().canSend,true)
- eq(n.SendPendingBossReport(),true);eq(n.ver,'1.3.1')
+ eq(n.SendPendingBossReport(),true);eq(n.ver,'1.4.0')
 end)
 test('known party categories route frozen lines and secret category preparation fails closed',function()
  for _,mode in ipairs({'constant','enum','absent','secret','secretMembership'}) do
@@ -541,11 +590,11 @@ test('solo raid demo optional and unreadable roster cannot prepare public report
   boss(s,mode=='optional' and 'Optional Boss' or nil);eq(n.GetPendingBossReport(),nil);eq(n.SendPendingBossReport(),false);eq(calls,0)
  end
 end)
-test('payload sanitation overtime and same-run wing refinement preserve immutable pending lines',function()
+test('payload sanitation elapsed and same-run wing refinement preserve immutable pending lines',function()
  for _,long in ipairs({false,true}) do
   local s,n=boot();reportParty(s);local sent={};SendChatMessage=function(text) assert(not text:find('[|%c]'));assert(#text<=255);sent[#sent+1]=text end
   local r=n.StartRun(n.DUNGEONS.rfc);local b=r.dungeon.bosses[1];if long then b.n=string.rep('X',300)..'|\n' end
-  s.clock=100+n.LIMIT+300;n.OnCreatureDead(nil,b.id,b.n,'BOSS_KILL');local p=n.GetPendingBossReport();assert(p.text:find('Overtime +5:00',1,true))
+  s.clock=100+n.LIMIT+300;n.OnCreatureDead(nil,b.id,b.n,'BOSS_KILL');local p=n.GetPendingBossReport();assert(p.text:find('Elapsed 1:05:00 (depleted) - 5:00 faster for +1',1,true))
   s:kill(1);s.clock=s.clock+10;eq(n.GetPendingBossReport().text,p.text);eq(n.SendPendingBossReport(),true);eq(sent[1],p.text)
  end
  local s,n=boot();reportParty(s);s.name='Scarlet Monastery';s.id=189;n.CheckZone();boss(s,'Houndmaster Loksey');local id=n.GetPendingBossReport().id
@@ -570,7 +619,7 @@ test('final automatic completion keeps boss-time after-deduction report availabl
  for i,b in ipairs(r.dungeon.bosses) do s.clock=100+i*10;s:kill('boss');s.event(nil,'BOSS_KILL',100+i,b.n) end
  eq(r.complete,true);eq(r.kills,84);eq(#sent,0);eq(n.GetPendingBossReport().count,4)
  s.clock=1000;for i=1,4 do eq(n.SendPendingBossReport(),true) end
- assert(sent[4]:find('59:20',1,true));assert(sent[4]:find('Forces 100%',1,true));assert(sent[4]:find('Bosses 4/4',1,true))
+ assert(sent[4]:find('Elapsed 0:40 (+3) - +3 is the highest tier',1,true));assert(sent[4]:find('Forces 100%',1,true));assert(sent[4]:find('Bosses 4/4',1,true))
 end)
 test('unit health handles its visible unit without rescanning every nameplate',function()
  local s,n=boot();n.StartRun(n.DUNGEONS.rfc);local scans=0

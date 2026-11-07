@@ -631,8 +631,16 @@ function ns.DungeonByKey(key)
     return ns.DUNGEONS[key]
 end
 
+-- Display helpers consistently clamp invalid elapsed values to zero. Test for
+-- restricted values first: never compare, stringify, or infer their contents.
+local function DisplaySeconds(sec)
+    if ns.IsSecret(sec) or type(sec) ~= "number" or sec ~= sec
+        or sec == math.huge or sec == -math.huge or sec < 0 then return 0 end
+    return sec
+end
+
 function ns.ChestForTime(sec)
-    if not sec then return 0 end
+    sec = DisplaySeconds(sec)
     if sec <= ns.PLUS3 then return 3 end
     if sec <= ns.PLUS2 then return 2 end
     if sec <= ns.PLUS1 then return 1 end
@@ -640,8 +648,7 @@ function ns.ChestForTime(sec)
 end
 
 function ns.FormatTime(sec)
-    if not sec or sec < 0 then sec = 0 end
-    local sign = ""
+    sec = DisplaySeconds(sec)
     -- elapsed display is always unsigned; overtime is handled by caller
     local s = math.floor(sec + 0.5)
     local h = math.floor(s / 3600)
@@ -651,6 +658,20 @@ function ns.FormatTime(sec)
         return string.format("%d:%02d:%02d", h, m, r)
     end
     return string.format("%d:%02d", m, r)
+end
+
+-- Only the immediately better reward tier matters, not the deplete countdown.
+function ns.NextChestInfo(sec)
+    sec = DisplaySeconds(sec)
+    local chest = ns.ChestForTime(sec)
+    if chest == 3 then
+        return {chest=3, fasterSeconds=0, text="+3 is the highest tier"}
+    end
+    local nextChest = chest + 1
+    local cutoff = nextChest == 3 and ns.PLUS3 or (nextChest == 2 and ns.PLUS2 or ns.PLUS1)
+    local faster = math.max(1, math.ceil(sec - cutoff))
+    return {chest=chest, nextChest=nextChest, fasterSeconds=faster,
+        text=ns.FormatTime(faster) .. " faster for +" .. nextChest}
 end
 
 function ns.FormatClock(sec, limit)

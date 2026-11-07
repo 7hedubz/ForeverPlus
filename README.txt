@@ -1,8 +1,8 @@
-ForeverPlus 1.3.1 — WoW Forever dungeon timer and run journal
+ForeverPlus 1.4.0 — WoW Forever dungeon timer and run journal
 ============================================================
 Author: DoHeal. Interface16001 / Camelot.
 Install in _forever_/Interface/AddOns/ForeverPlus.
-From 1.1.0-1.3.0: /reload. New install or upgrade from before1.1.0: relaunch.
+From 1.1.0-1.3.1: /reload. New install or upgrade from before1.1.0: relaunch.
 
 DUNGEON JOURNAL
 /fplus opens dungeon -> individual run -> roster, damage/healing, deaths.
@@ -46,11 +46,18 @@ appears even with the timer HUD hidden. Explicit abandon archives once and
 suppresses automatic restarts while still inside, including after reload.
 
 BOSSES AND TIMER
-One hour; +3 through36:00, +2 through48:00, +1 through60:00. Overtime continues.
+Elapsed stopwatch, not countdown. +3 through36:00, +2 through48:00,
++1 through60:00. After one hour elapsed keeps counting (1:01:00, etc).
+Next BETTER tier comparison: 38:36 is +2, needs 2:36 faster for +3;
+49:00 is +1, needs 1:00 faster for +2; 1:01:00 needs 1:00 faster for +1.
++3 is the highest tier; exact cutoffs stay inclusive. Fractional misses round
+required improvement up to a positive whole second. Active runs show pace,
+not a promised final reward; completed duration and comparison stay frozen.
+Completed journal details and local completion messages show the gap too.
 Auto-complete requires all configured bosses plus100% non-boss forces.
 Unknown/empty boss rosters require /fplus complete. Exact names/aliases and
 verified death can identify bosses with restricted GUIDs; disappearance alone
-never counts. Each new required boss PREPARES a time/forces/progress snapshot.
+never counts. Each new required boss PREPARES an elapsed/tier-gap/forces/progress snapshot.
 Click HUD Send report (N), minimap Send boss report, or type /fplus report
 OUT OF COMBAT. Each click/command attempts ONE pending line synchronously;
 boss callbacks, timers, UI ticks and combat-end events NEVER send public chat.
@@ -79,6 +86,20 @@ Forever population quotas are bundled. /fplus complete remains the manual
 override; dungeon-specific scaling is not silently applied.
 
 STATS AND DEATHS
+A guarded native C_DamageMeter reader uses public per-player session amounts
+when available, excluding preexisting sessions and saving owned session
+contributions across reload. Repeated cumulative reads do not add repeatedly.
+Native and legacy observations are not blindly summed. Missing/secret amounts
+remain unknown; unavailable APIs cannot be replaced by fabricated zero totals.
+Each metric shows dash for unknown and 0 only for readable measured zero.
+Resume no longer promotes unavailable data to partial zero stats. Legacy
+all-zero runs without evidence remain unavailable; no historical backfill is
+invented. Older synced zero records may lack local availability evidence.
+Public exact full party names can maintain death/resurrection identity when
+GUIDs are restricted, without recovering any hidden GUID. Unavailable names,
+conflicting readable identities and unreadable states still fail closed.
+Completed records freeze at their boundary; later fights cannot fill gaps.
+/fplus debug includes native-provider/availability status for live checks.
 Damage excludes overkill, healing excludes overhealing, known pets attribute
 to owners. Client restrictions can make damage/healing unavailable (dash), not
 fabricated zero totals. The forbidden CLEU registration remains removed.

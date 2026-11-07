@@ -98,13 +98,20 @@ end
 assert(ns.GetRun().kills==0,'boss notifications were included in forces')
 local before=#sent
 advance(60)
+advance(2316-ns.Elapsed(ns.GetRun()))
+ns.UI.Show();ns.UI.Tick()
+assert(ForeverPlusFrame.clock.text=='Elapsed 38:36','real HUD did not show elapsed time')
+assert(ForeverPlusFrame.tierGap.text=='2:36 faster for +3','real HUD next better tier mismatch')
 for i=1,84 do
  local guid='Creature-0-0-0-0-999-'..i
  emit('SPELL_DAMAGE',guid,'Trash');emit('UNIT_DIED',guid,'Trash')
  fire('PARTY_KILL','opaque-attacker','opaque-target')
 end
 assert(ns.GetRun().complete)
-assert(ns.GetBest('rfc').sec>=60)
+assert(ns.GetRun().chest==2,'38:36 completion changed chest thresholds')
+assert(ns.GetBest('rfc').sec==2316)
+advance(2);ns.UI.Tick()
+assert(ForeverPlusFrame.clock.text=='Elapsed 38:36' and ForeverPlusFrame.tierGap.text=='2:36 faster for +3','completed elapsed/gap drifted')
 local history=ns.History.List('rfc')
 assert(#history==1,'completed run was not archived')
 assert(#history[1].players==2,'non-addon friend missing from roster')
@@ -161,7 +168,7 @@ fire('PARTY_KILL','opaque-attacker','opaque-target')
 fire('BOSS_KILL',0,'Ghamoo-ra');fire('ENCOUNTER_END',0,'Ghamoo-ra',1,5,1)
 assert(publicCalls==0 and #reports==0,'boss callback attempted public chat without player action')
 local queued=ns.GetPendingBossReport()
-assert(queued and queued.text:find('Forces 1.2%',1,true) and queued.count==1,'post-deduction report not prepared/deduplicated')
+assert(queued and queued.text:find('Forces 1.2%',1,true) and queued.text:find('Elapsed ',1,true) and not queued.text:find('Time remaining',1,true) and queued.count==1,'post-deduction report not prepared/deduplicated')
 advance(2);ns.UI.Tick()
 assert(publicCalls==0,'timer/UI tick attempted public chat')
 assert(ForeverPlusFrame:IsShown() and ForeverPlusFrame.reportButton,'ready report did not expose click action')
@@ -281,6 +288,24 @@ ns.History.UnitState,ns.KeyFromKill,ns.UI.RefreshVote=goodUnitState,goodKeyFromK
 advance(1)
 assert(ns.UI.GetDisplayDiagnostics().forces==ns.ForcesPercent(persistent),'recovery drifted from core')
 print('PASS injected scanner/history/vote failures preserve immediate forces, periodic clock, error diagnostics and click-only chat')
+
+-- Public party identities preserve death tracking even when GUIDs are restricted.
+local totalBeforeRestricted=ns.History.TotalDeaths(persistent)
+local readableGUID,baseSecret=UnitGUID,issecretvalue
+UnitGUID=function(u) if u=='player' or u=='party1' then return 'opaque-party-guid' end;return readableGUID(u) end
+issecretvalue=function(v) return v=='opaque-party-guid' or baseSecret(v) end
+friendDead=false;fire('UNIT_FLAGS','party1')
+friendDead=true;fire('UNIT_HEALTH','party1');fire('UNIT_FLAGS','party1')
+assert(ns.History.TotalDeaths(persistent)==totalBeforeRestricted+1,'restricted GUID blocked public-identity party death')
+friendDead=false;fire('UNIT_FLAGS','party1');friendDead=true;fire('UNIT_HEALTH','party1')
+assert(ns.History.TotalDeaths(persistent)==totalBeforeRestricted+2,'resurrection did not permit another public-identity death')
+local priorHistoryID=persistent.history.id
+frames,timers,tickers={},{},{}
+ns=loadAddon();fire('PLAYER_ENTERING_WORLD');advance(1);persistent=ns.GetRun()
+assert(persistent.history.id==priorHistoryID,'stats history identity lost on restricted-GUID reload')
+assert(ns.History.TotalDeaths(persistent)==totalBeforeRestricted+2,'restricted-GUID death counts lost or doubled across reload')
+assert(persistent.history.coverage=='unavailable','reload fabricated partial combat stats without readable events')
+print('PASS restricted GUID/public party identity death tracking, repeat deaths and reload persistence without invented combat stats')
 
 -- Explicit solo confirmation via the real comm module cannot end the run early.
 IsInGroup=function() return false end

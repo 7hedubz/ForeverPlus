@@ -26,7 +26,8 @@ local db={pos={},minimap={},best={},peers={},showMinimap=true}
 ns.DB=function() return db end
 ns.GetRun=function() return run end
 ns.GetBest=function() return nil end
-ns.Elapsed=function() return 10 end
+local elapsed=10
+ns.Elapsed=function() return elapsed end
 assert(loadfile('Dungeons.lua'))('ForeverPlus',ns)
 assert(loadfile('UI.lua'))('ForeverPlus',ns)
 ns.UI.Init();ns.UI.Show();ns.UI.ToggleBoard();ns.UI.RefreshBoard()
@@ -207,3 +208,49 @@ ns.UI.RefreshVote=goodVote;ns.GetBest=function() return nil end
 run=nil;ns.UI.Tick();display=ns.UI.GetDisplayDiagnostics()
 assert(display.forces==0 and display.text=='Bosses 0/0     Forces 0%','idle display snapshot stayed stale')
 print('PASS optional UI failures do not freeze HUD; fractional forces and display diagnostics stay current')
+-- Elapsed time and the next BETTER tier gap replace the countdown.
+run={key='rfc',name='Ragefire Chasm',active=true,kills=1,deaths=0,dungeon=ns.DUNGEONS.rfc,bossDown={}}
+elapsed=2316
+ns.UI.Show();ns.UI.Tick()
+assert(ForeverPlusFrame.clock.text=='Elapsed 38:36','HUD still shows countdown instead of elapsed time')
+assert(ForeverPlusFrame.tierGap,'missing separate next-tier line')
+assert(ForeverPlusFrame.tierGap.text=='2:36 faster for +3','incorrect next-better-tier gap')
+assert(ForeverPlusFrame.height>=204,'next-tier line was squeezed into old HUD bands')
+elapsed=2940;ns.UI.Tick()
+assert(ForeverPlusFrame.clock.text=='Elapsed 49:00')
+assert(ForeverPlusFrame.tierGap.text=='1:00 faster for +2')
+elapsed=3660;ns.UI.Tick()
+assert(ForeverPlusFrame.clock.text=='Elapsed 1:01:00','overtime elapsed time was prefixed or reset')
+assert(ForeverPlusFrame.tierGap.text=='1:00 faster for +1')
+run.complete=true;run.active=false;run.sec=2316;elapsed=8000;ns.UI.Tick()
+assert(ForeverPlusFrame.clock.text=='Elapsed 38:36','completed elapsed did not freeze')
+assert(ForeverPlusFrame.tierGap.text=='2:36 faster for +3','completed gap did not freeze')
+run.complete=false;run.active=true;run.sec=nil;elapsed=100;ns.UI.Tick()
+assert(ForeverPlusFrame.tierGap.text=='+3 is the highest tier','top tier falsely promises a higher chest')
+records[1].sec=2316;records[1].chest=2
+ns.UI.SelectDungeon('rfc');ns.UI.SelectRun('r1')
+assert(ForeverPlusBoard.detailSummary.text:find('2:36 faster for +3',1,true),'completed journal lacks next-tier comparison')
+run=nil;ns.UI.Tick()
+assert(ForeverPlusFrame.clock.text=='Elapsed 0:00' and ForeverPlusFrame.tierGap.text=='Next tier: —','idle elapsed/gap remains stale')
+print('PASS elapsed HUD, next-better chest gaps, top tier, overtime, frozen completion and journal comparison')
+records[1].coverage='unavailable';records[1].players[1].damage=0;records[1].players[1].healing=0;records[1].players[1].deaths=3
+ns.UI.SelectDungeon('rfc');ns.UI.SelectRun('r1')
+assert(ForeverPlusBoard.playerLines[1].damage.text=='—' and ForeverPlusBoard.playerLines[1].healing.text=='—','unavailable combat totals appeared as fabricated zero')
+assert(ForeverPlusBoard.playerLines[1].deaths.text=='3','independent saved deaths were hidden with unavailable combat stats')
+assert(ForeverPlusBoard.totals.text:find('— dmg / — heal',1,true),'unavailable group totals displayed as zero')
+print('PASS unavailable combat totals render as dashes while independent saved deaths remain visible')
+records[1].coverage='partial';records[1].players[1].damageKnown=true;records[1].players[1].healingKnown=nil
+ns.UI.RefreshBoard()
+assert(ForeverPlusBoard.playerLines[1].damage.text=='0','readable measured-zero damage was hidden')
+assert(ForeverPlusBoard.playerLines[1].healing.text=='—','unknown healing displayed as measured zero')
+assert(ForeverPlusBoard.totals.text:find('— heal',1,true),'group healing availability was incorrectly inferred from damage')
+records[1].players[1].healingKnown=true;ns.UI.RefreshBoard()
+assert(ForeverPlusBoard.playerLines[1].healing.text=='0','measured-zero healing not distinguished from unavailable')
+print('PASS per-metric availability distinguishes unknown from measured zero and preserves independent group totals')
+for _,p in ipairs(records[1].players) do p.deaths=0;p.deathsKnown=nil end
+ns.UI.RefreshBoard()
+assert(ForeverPlusBoard.playerLines[1].deaths.text=='—','unknown legacy zero deaths displayed as measured zero')
+assert(ForeverPlusBoard.totals.text:find('— deaths',1,true))
+records[1].players[1].deathsKnown=true;ns.UI.RefreshBoard()
+assert(ForeverPlusBoard.playerLines[1].deaths.text=='0','verified zero deaths were hidden')
+print('PASS unknown zero deaths differ from a verified living/death baseline')

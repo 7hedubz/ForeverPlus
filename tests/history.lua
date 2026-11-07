@@ -210,16 +210,16 @@ test('reload retains verified dead state so a real resurrection permits the next
  s.units.party1.dead=true;s.event(nil,'UNIT_FLAGS','party1')
  assert(h.TotalDeaths(r)==2,'resume must preserve verified state and accept a later real death')
 end)
-test('death identity rejects secret or mismatched GUID and uses canonical names only when GUID absent',function()
+test('legacy death rejects secret GUID but party unit events use verified public identity',function()
  local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
  secret={};assert(not h.Death(r,secret,true),'secret GUID must not become a local death');secret=nil
  assert(not h.Death(r,'Player-Stranger',true),'mismatched GUID must not fall back to local player')
  local guid=UnitGUID;secret={};UnitGUID=function(u) if u=='player' then return secret end;return guid(u) end
- s.event(nil,'PLAYER_DEAD');assert(r.deaths==0,'event must not erase secret GUID before matching')
+ s.event(nil,'PLAYER_DEAD');assert(r.deaths==1,'public canonical unit identity permits own death under restricted GUID')
  UnitGUID=guid;secret=nil
  s.units.party1.guid=nil;s.units.party1.dead=true;s.event(nil,'UNIT_HEALTH','party1')
  assert(r.history.players[2].deaths==1,'canonical roster name must work when GUID is unavailable')
- assert(r.deaths==0)
+ assert(r.deaths==1)
 end)
 test('resurrection notifications need readable living state and cannot erase restricted identity latch',function()
  local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
@@ -227,7 +227,8 @@ test('resurrection notifications need readable living state and cannot erase res
  s.event(nil,'PLAYER_ALIVE');s.event(nil,'PLAYER_DEAD');assert(r.deaths==1,'alive event while still dead must not clear latch')
  s:emit('SPELL_RESURRECT','Player-2','Player-1');s:emit('UNIT_DIED','Creature-1','Player-1');assert(r.deaths==1,'resurrection cast alone is not a verified resurrection')
  s.units.player.dead=false;local guid=UnitGUID;secret={};UnitGUID=function() return secret end
- s.event(nil,'PLAYER_UNGHOST');UnitGUID=guid;secret=nil;s.event(nil,'PLAYER_DEAD');assert(r.deaths==1,'secret GUID must not clear local latch')
+ local full=UnitFullName;UnitFullName=function() return secret,'Realm' end
+ s.event(nil,'PLAYER_UNGHOST');UnitFullName=full;UnitGUID=guid;secret=nil;s.event(nil,'PLAYER_DEAD');assert(r.deaths==1,'secret public name must not clear local latch')
  s.event(nil,'PLAYER_ALIVE');s.event(nil,'PLAYER_DEAD');assert(r.deaths==2,'verified alive event permits next death')
 end)
 test('debug includes tracked players and party death total with optional history',function()
@@ -248,7 +249,7 @@ test('late readable GUID preserves name-keyed death baseline and deduplication',
 end)
 test('unavailable restricted and absent party reads never invent deaths or clear latches',function()
  local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc);local exists,dead,guid=UnitExists,UnitIsDeadOrGhost,UnitGUID
- for _,field in ipairs({'exists','dead','guid'}) do
+ for _,field in ipairs({'exists','dead'}) do
   for _,value in ipairs({'nil','secret','throw'}) do
    if not (field=='guid' and value=='nil') then -- Missing GUID with a readable canonical name is intentionally supported.
     secret={};local function unreadable() if value=='throw' then error('restricted') elseif value=='secret' then return secret end end
@@ -268,6 +269,99 @@ test('completed inactive and practice runs cannot gain new deaths',function()
  assert(h.TotalDeaths(r)==1 and h.List()[1].players[2].deaths==1 and r.deaths==0)
  r.active=true;assert(not h.Death(r,'Player-1'),'completed wins even with stale active flag');r.active=false;r.complete=false;assert(not h.Death(r,'Player-1'))
  r.active=true;r.practice=true;assert(not h.Death(r,'Player-1'));h.UnitState(r,'player');assert(h.TotalDeaths(r)==1)
+end)
+test('reload and restricted combat without usable events stay unavailable through archive',function()
+ local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
+ secret={};h.Observe(r,{[2]=secret});secret=nil
+ assert(r.history.coverage=='unavailable','restricted events are not observed zero totals')
+ s:emit('SWING_DAMAGE','Player-1','Creature-1','restricted',0)
+ assert(r.history.coverage=='unavailable')
+ local saved=r.history;saved.coverage='partial';h.Resume(r,saved)
+ assert(r.history.coverage=='unavailable','legacy zero partial lacks evidence')
+ local db=ForeverPlusDB;s,n,h=core(db);s.event(nil,'PLAYER_ENTERING_WORLD');r=n.GetRun()
+ assert(r.history.coverage=='unavailable','reload must not promote unavailable')
+ s.clock=200;s.unix=100100;n.CompleteRun('test')
+ assert(h.List()[1].coverage=='unavailable')
+end)
+test('restricted party GUID deaths survive reload and verified resurrection',function()
+ local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
+ secret={};s.units.party1.guid=secret;s.units.party1.dead=true
+ s.event(nil,'UNIT_HEALTH','party1');s.event(nil,'UNIT_FLAGS','party1')
+ assert(r.history.players[2].deaths==1 and r.deaths==0,'public party identity must count once')
+ local saved=r.history;h.Resume(r,saved);h.UnitState(r,'party1')
+ assert(h.TotalDeaths(r)==1,'reload must preserve exact death latch')
+ s.units.party1.dead=false;h.UnitState(r,'party1');s.units.party1.dead=true;h.UnitState(r,'party1')
+ assert(h.TotalDeaths(r)==2,'verified resurrection must permit second death')
+ secret=nil
+end)
+test('death evidence alone never enables combat totals on resume or archive',function()
+ local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
+ s.event(nil,'PLAYER_DEAD');local saved=r.history;h.Resume(r,saved)
+ assert(r.history.coverage=='unavailable' and h.TotalDeaths(r)==1,'deaths are independently readable, not combat coverage')
+ s.clock=200;s.unix=100100;n.CompleteRun('test')
+ assert(h.List()[1].coverage=='unavailable' and h.List()[1].players[1].deaths==1)
+end)
+test('resume preserves readable cumulative combat and verified zero event evidence',function()
+ for _,amount in ipairs({0,123}) do
+  local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
+  s:emit('SWING_DAMAGE','Player-1','Creature-1',amount,0)
+  local saved=r.history;if amount>0 then saved.combatObserved=nil end
+  h.Resume(r,saved);assert(r.history.coverage=='partial' and r.history.players[1].damage==amount)
+  secret={};h.Observe(r,{[2]=secret});secret=nil
+  s.clock=200;s.unix=100100;n.CompleteRun('test')
+  assert(h.List()[1].coverage=='partial' and h.List()[1].players[1].damage==amount)
+ end
+end)
+test('initial restricted GUID roster uses only public party names without granting combat ownership',function()
+ local s,n,h=core();secret={};s.units.player.guid=secret;s.units.party1.guid=secret
+ local r=n.StartRun(n.DUNGEONS.rfc)
+ assert(#r.history.players==2,'public roster must survive restricted GUIDs at start')
+ assert(r.history.players[1].guid=='' and r.history.players[2].guid=='')
+ s.event(nil,'PLAYER_DEAD');s.units.party1.dead=true;s.event(nil,'UNIT_HEALTH','party1')
+ assert(r.deaths==1 and h.TotalDeaths(r)==2)
+ s:emit('SWING_DAMAGE',secret,'Creature-1',200,0)
+ s:emit('SPELL_SUMMON',secret,'Guardian-Unknown',1,'Summon',1)
+ s:emit('SWING_DAMAGE','Guardian-Unknown','Creature-1',200,0)
+ assert(r.history.coverage=='unavailable' and r.history.players[1].damage==0 and r.history.players[2].damage==0)
+ secret=nil
+end)
+test('saved legacy zero combat records downgrade without losing nonzero totals or verified zero evidence',function()
+ local legacy=record('legacy');for _,p in ipairs(legacy.players) do p.damage=0;p.healing=0;p.deaths=0 end
+ local positive=record('positive');positive.startUnix=3000;positive.endUnix=3600
+ local h=boot({history={legacy,positive}})
+ assert(h.Get('legacy').coverage=='unavailable','saved all-zero partial has no combat evidence')
+ assert(h.Get('positive').coverage=='partial' and h.Get('positive').players[1].damage==100)
+ local s,n,hh=core();n.StartRun(n.DUNGEONS.rfc);s:emit('SWING_DAMAGE','Player-1','Creature-1',0,0)
+ s.clock=200;s.unix=100100;n.CompleteRun('test');local db=ForeverPlusDB
+ hh=boot(db);assert(hh.List()[1].coverage=='partial','verified zero evidence survives archive and storage reload')
+ assert(hh.List()[1].combatObserved==nil,'local evidence does not extend wire records')
+end)
+test('validated known combat flags independently preserve zero coverage but deaths do not',function()
+ for _,field in ipairs({'damageKnown','healingKnown','deathsKnown'}) do
+  local h=boot();local raw=record('known-'..field)
+  for _,p in ipairs(raw.players) do p.damage=0;p.healing=0;p.deaths=0 end
+  raw.players[1][field]=true
+  local v=assert(h.Validate(raw));h=boot({history={v}})
+  assert(h.List()[1].coverage==(field=='deathsKnown' and 'unavailable' or 'partial'),field..' evidence misclassified')
+ end
+end)
+test('unit identity fails closed on private names realms ambiguity conflicting GUID and stale tokens',function()
+ for _,case in ipairs({'secretName','secretRealm','missingName','missingRealm','ambiguous','conflict','absent','target','pet'}) do
+  local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc);local full=UnitFullName
+  secret={};s.units.party1.guid=secret;s.units.party1.dead=true
+  if case=='secretName' then UnitFullName=function() return secret,'Realm' end
+  elseif case=='secretRealm' then UnitFullName=function() return 'Peer',secret end
+  elseif case=='missingName' then UnitFullName=function() return nil,'Realm' end
+  elseif case=='missingRealm' then UnitFullName=function() return 'Peer',nil end
+  elseif case=='ambiguous' then r.history.players[3]={guid='Player-3',name='Peer-Realm',class='MAGE',damage=0,healing=0,deaths=0}
+  elseif case=='conflict' then s.units.party1.guid='Player-Stranger'
+  elseif case=='absent' then s.units.party1=nil end
+  local token=(case=='target' or case=='pet') and case or 'party1'
+  if token~='party1' then s.units[token]={name='Peer',guid=secret,dead=true} end
+  h.UnitState(r,token);assert(not h.UnitDeath(r,token),case..' must not accept death')
+  assert(h.TotalDeaths(r)==0,case..' fabricated death')
+  UnitFullName=full;secret=nil
+ end
 end)
 local failures=0
 for _,t in ipairs(tests) do local ok,e=pcall(t[2]); if ok then print('PASS '..t[1]) else failures=failures+1; print('FAIL '..t[1]..': '..tostring(e)) end end

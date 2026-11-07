@@ -48,7 +48,7 @@ function UI.Init()
     if frame then return end
 
     frame = CreateFrame("Frame", "ForeverPlusFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
-    frame:SetSize(300, 184)
+    frame:SetSize(300, 204)
     frame:SetPoint("TOP", UIParent, "TOP", 0, -80)
     frame:SetMovable(true)
     frame:EnableMouse(true)
@@ -101,7 +101,7 @@ function UI.Init()
         local font = clock:GetFont()
         if font then clock:SetFont(font, 22, "OUTLINE") end
     end
-    clock:SetText("60:00")
+    clock:SetText("Elapsed 0:00")
     frame.clock = clock
 
     local chest = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -109,8 +109,15 @@ function UI.Init()
     chest:SetText("+3")
     frame.chest = chest
 
+    local gap = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    gap:SetPoint("TOPLEFT", clock, "BOTTOMLEFT", 0, -4)
+    gap:SetPoint("RIGHT", frame, "RIGHT", -12, 0)
+    gap:SetJustifyH("LEFT")
+    gap:SetText("Next tier: —")
+    frame.tierGap = gap
+
     local best = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    best:SetPoint("TOPLEFT", clock, "BOTTOMLEFT", 0, -8)
+    best:SetPoint("TOPLEFT", gap, "BOTTOMLEFT", 0, -6)
     best:SetWidth(170)
     best:SetJustifyH("LEFT")
     best:SetText("Best: —")
@@ -211,6 +218,19 @@ local function ShortNumber(value)
     if value >= 1000 then return string.format("%.1fk", value / 1000) end
     return string.format("%.0f", value)
 end
+local function MetricKnown(record, player, field)
+    if record.coverage == "unavailable" then return false end
+    local value, known = player[field], player[field .. "Known"]
+    if (ns.IsSecret and (ns.IsSecret(value) or ns.IsSecret(known))) or type(value) ~= "number" or value ~= value or value < 0 or value == math.huge then return false end
+    return value > 0 or known == true or record.coverage == "observed"
+end
+
+local function DeathKnown(player)
+    local value, known = player.deaths, player.deathsKnown
+    if (ns.IsSecret and (ns.IsSecret(value) or ns.IsSecret(known))) or type(value) ~= "number" or value ~= value or value < 0 or value == math.huge then return false end
+    return value > 0 or known == true
+end
+
 local function Stamp(value)
     if date and type(value) == "number" then
         local ok, result = pcall(date, "%m/%d/%y %H:%M", value)
@@ -541,24 +561,30 @@ function UI.RefreshBoard()
     if selected then
         board.detailTitle:SetText(SafeText(selected.dungeonName))
         local state = selected.status == "completed" and "Completed" or SafeText(selected.status)
-        board.detailSummary:SetText(Stamp(selected.endUnix) .. "\n" .. ns.FormatTime(selected.sec) .. " · " .. state .. (selected.manual and " · manual finish" or ""))
+        local gap = selected.status == "completed" and ("\n" .. ns.NextChestInfo(selected.sec).text) or ""
+        board.detailSummary:SetText(Stamp(selected.endUnix) .. "\nElapsed " .. ns.FormatTime(selected.sec) .. " · " .. state .. (selected.manual and " · manual finish" or "") .. gap)
         local coverage = {observed="Observed combat stats (client-visible events)", partial="Partial stats — some events were unavailable", unavailable="Damage / healing unavailable — no usable combat events"}
         board.coverage:SetText(coverage[selected.coverage] or coverage.unavailable)
         board.source:SetText("Recorded by " .. SafeText(selected.recordedBy) .. " · shared stats are unverified")
         local damage, healing, deaths = 0, 0, 0
+        local damageKnown, healingKnown, deathsKnown = false, false, false
         for i, p in ipairs(selected.players or {}) do
             local row = board.playerLines[i]
             if not row then break end
             row.name:SetText(SafeText(p.name))
             local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[p.class]
             row.name:SetTextColor(color and color.r or 1, color and color.g or 1, color and color.b or 1)
-            row.damage:SetText(selected.coverage == "unavailable" and "—" or ShortNumber(p.damage))
-            row.healing:SetText(selected.coverage == "unavailable" and "—" or ShortNumber(p.healing))
-            row.deaths:SetText(tostring(p.deaths or 0))
+            local dk, hk = MetricKnown(selected, p, "damage"), MetricKnown(selected, p, "healing")
+            damageKnown, healingKnown = damageKnown or dk, healingKnown or hk
+            row.damage:SetText(dk and ShortNumber(p.damage) or "—")
+            row.healing:SetText(hk and ShortNumber(p.healing) or "—")
+            local deathKnown = DeathKnown(p)
+            deathsKnown = deathsKnown or deathKnown
+            row.deaths:SetText(deathKnown and tostring(p.deaths or 0) or "—")
             row:Show()
             damage, healing, deaths = damage + (p.damage or 0), healing + (p.healing or 0), deaths + (p.deaths or 0)
         end
-        board.totals:SetText("Group: " .. (selected.coverage == "unavailable" and "— dmg / — heal" or (ShortNumber(damage) .. " dmg / " .. ShortNumber(healing) .. " heal")) .. " / " .. deaths .. " deaths")
+        board.totals:SetText("Group: " .. (damageKnown and ShortNumber(damage) or "—") .. " dmg / " .. (healingKnown and ShortNumber(healing) or "—") .. " heal / " .. (deathsKnown and tostring(deaths) or "—") .. " deaths")
     else
         board.detailTitle:SetText("Select a run")
         local best = key and ns.GetBest(key)
@@ -704,7 +730,8 @@ local function RefreshHUD()
     if not frame:IsShown() then return end
     if not run then
         frame.dungeon:SetText("No active key")
-        frame.clock:SetText("60:00"); frame.clock:SetTextColor(0.7, 0.7, 0.7)
+        frame.clock:SetText("Elapsed 0:00"); frame.clock:SetTextColor(0.7, 0.7, 0.7)
+        frame.tierGap:SetText("Next tier: —")
         frame.chest:SetText(""); frame.chest:SetTextColor(1, 1, 1)
         frame.title:SetText("FOREVER +1")
         frame.best:SetText("Best: —"); frame.deaths:SetText("Deaths: 0")
@@ -714,9 +741,10 @@ local function RefreshHUD()
         return
     end
     local sec = run.sec or ns.Elapsed(run)
-    local clock = ns.FormatClock(sec, ns.LIMIT)
+    local clock = "Elapsed " .. ns.FormatTime(sec)
     local cr, cg, cb = ColorFor(sec)
     frame.clock:SetText(clock); frame.clock:SetTextColor(cr, cg, cb)
+    frame.tierGap:SetText(ns.NextChestInfo(sec).text)
     frame.dungeon:SetText(run.name or ""); frame.title:SetText("FOREVER +1")
     local chest = ns.ChestForTime(sec)
     if run.complete then
