@@ -1,10 +1,10 @@
 # ForeverPlus
 
-Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.2.0**, Interface `16001` (Camelot).
+Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.2.1**, Interface `16001` (Camelot).
 
 ## Install / upgrade
 
-Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.1.4 to 1.2.0** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
+Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.2.0 to 1.2.1** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
 
 ## Dungeon journal
 
@@ -71,11 +71,21 @@ The saved run keeps its existing progress when upgrading, then persists its new 
 
 Boss tracking remains independent of force GUID eligibility: exact readable names/aliases and verified death can identify required bosses with restricted GUIDs. A prior living-hostile observation supports a corpse that stops being attackable; mere disappearance is not a death. Name-only boss tracking excludes the recognized boss but does not create a native kill event.
 
-Each newly recorded required boss posts **time remaining (or overtime), current Forces %, and boss progress** to PARTY chat (INSTANCE_CHAT for an instance-category group) after the boss deduction. Plain-text separators avoid invalid WoW pipe escape codes; `/fplus debug` includes the last send attempt/error, not a delivery guarantee. Duplicate signals do not repeat the report; demo/solo/raid runs do not post. Each addon instance reports its own observation, not a cross-client announcer election. Failed public sends are not retried.
+### Click-to-send boss reports
+
+Each newly recorded required boss **prepares** a one-line snapshot: boss name, time remaining/overtime, Forces % after boss deduction, and boss progress. It does **not** call public chat from the boss event, a timer, OnUpdate, or a combat-end callback. The user reproduced public guild chat delivering from an immediate `/run` but silently not delivering after `C_Timer.After`, despite both returning `pcall: true, result: nil`. This points to the player-action context; it is not proof of all server permission/channel rules.
+
+The HUD opens with **Send report (N)** ready. Click it **out of combat** to attempt one report synchronously in that button's click handler; alternatively use **minimap → Send boss report** or **`/fplus report`** directly in game chat. One player action sends one pending line, not a multi-line burst. PARTY is used normally, INSTANCE_CHAT for a confirmed instance-category group. The legacy global API is preferred, with the modern namespace as an availability fallback, matching the successful direct test. There is no automatic retry or second-API attempt.
+
+Reports are bounded, session-only snapshots, not a timer-driven sender queue. Duplicate boss signals do not create more reports. Completion permits its queued final report, while explicit reset/abandonment, a new attempt, changed party membership/context, and reload discard stale pending work. Time and forces in a queued report describe the boss-death snapshot, not a later click. Demo/solo/raid runs do not prepare public reports.
+
+Thrown/explicitly rejected sends remain for a **manual** retry; leaving combat only re-enables the button, never sends. A normal void return consumes one attempted line but does **not** prove delivery. `/fplus debug` reports cumulative attempt/error counters and the last status, with delivery explicitly unverified; the HUD button shows the pending count. Check the actual party/instance chat after clicking. No cross-client announcer election or hidden-API bypass is claimed.
 
 The forbidden CLEU registration remains removed. Optional legacy-parser tests are synthetic and do not imply live damage/healing availability. Run `/fplus debug` after a party kill to see the native-event ledger and boss deductions; target details are optional diagnostics, not a gameplay requirement.
 
 ## Commands and minimap
+
+`/fplus report` attempts one pending boss report immediately from the typed command, out of combat. It does not schedule a timer.
 
 | Command | Action |
 |---|---|

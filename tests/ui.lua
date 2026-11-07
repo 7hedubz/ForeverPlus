@@ -156,3 +156,29 @@ assert(not ForeverPlusFrame.abandonButton.enabled,'idle abandon button enabled')
 ns.UI.ToggleMinimapMenu(ForeverPlusMinimapButton)
 assert(ForeverPlusMinimapMenu.abandonButton,'minimap lacks abandon action')
 print('PASS explicit abandon routing, confirmation/No/Yes, hidden-HUD votes, terminal dismissal, inactive guards')
+-- Public reports must be synchronous click actions, never OnUpdate/timer sends.
+local pendingReport={id=1,text='ForeverPlus: Boss down - Forces 2%.',channel='PARTY',count=2,canSend=true,status='Ready'}
+local hardware=false
+local sends=0
+ns.GetPendingBossReport=function() return pendingReport end
+ns.SendPendingBossReport=function()
+ assert(hardware,'send was deferred or run from a non-click UI path')
+ sends=sends+1;pendingReport=nil
+end
+ns.UI.Show();ns.UI.Tick()
+assert(ForeverPlusFrame.reportButton,'missing report button')
+assert(ForeverPlusFrame.reportButton.enabled and ForeverPlusFrame.reportButton.text:find('2',1,true))
+assert(sends==0,'tick automatically sent public chat')
+hardware=true;ForeverPlusFrame.reportButton.scripts.OnClick();hardware=false
+assert(sends==1,'HUD click did not synchronously send one report')
+assert(not ForeverPlusFrame.reportButton.enabled,'consumed report left button enabled')
+pendingReport={id=2,text='Another boss',channel='PARTY',count=1,canSend=false,status='Leave combat first'}
+ns.UI.Tick();assert(not ForeverPlusFrame.reportButton.enabled)
+ns.UI.RefreshBossReport();assert(sends==1,'refresh sent a report')
+pendingReport.canSend=true
+ns.UI.ToggleMinimapMenu(ForeverPlusMinimapButton)
+assert(ForeverPlusMinimapMenu.reportButton,'missing minimap report action')
+hardware=true;ForeverPlusMinimapMenu.reportButton.scripts.OnClick();hardware=false
+assert(sends==2,'minimap click did not synchronously send one report')
+ns.UI.Tick();assert(sends==2,'tick retried a report')
+print('PASS report buttons send synchronously per click, never UI ticks; availability and pending counts refresh')

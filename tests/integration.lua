@@ -47,6 +47,7 @@ LE_PARTY_CATEGORY_INSTANCE=2
 IsInGroup=function(category) return category==nil end
 IsInInstance=function() return kind=='party' end
 IsInRaid=function() return false end
+InCombatLockdown=function() return false end
 IsInGuild=function() return false end
 issecretvalue=function(v) return v=='private-creature-guid' or v=='opaque-attacker' or v=='opaque-target' end
 strsplit=function(delim,str) local parts={};for x in str:gmatch('[^'..delim..']+') do parts[#parts+1]=x end;return unpack(parts) end
@@ -149,11 +150,25 @@ fire('PARTY_KILL','opaque-attacker','opaque-target')
 assert(ns.ForcesPercent(ns.GetRun())==2,'opaque native kill notification did not count')
 fire('UNIT_FLAGS','target');assert(ns.GetRun().kills==1,'duplicate corpse counted')
 local reports={}
-C_ChatInfo.SendChatMessage=function(msg,ch) assert(not msg:find('|',1,true),'Invalid escape code in chat message');assert(#msg<=255);reports[#reports+1]={msg=msg,ch=ch} end
+local hardware, publicCalls=false,0
+C_ChatInfo.SendChatMessage=function(msg,ch)
+ publicCalls=publicCalls+1
+ assert(not msg:find('|',1,true),'Invalid escape code in chat message');assert(#msg<=255)
+ -- Reproduce the client: no exception and nil return even when silently blocked.
+ if hardware then reports[#reports+1]={msg=msg,ch=ch} end
+end
 fire('PARTY_KILL','opaque-attacker','opaque-target')
 fire('BOSS_KILL',0,'Ghamoo-ra');fire('ENCOUNTER_END',0,'Ghamoo-ra',1,5,1)
-assert(#reports==1 and reports[1].ch=='PARTY' and reports[1].msg:find('Forces 2%',1,true),'boss party report missing or duplicated')
-print('PASS full addon opaque native forces, no scan double-count, boss exclusion and party report')
+assert(publicCalls==0 and #reports==0,'boss callback attempted public chat without player action')
+local queued=ns.GetPendingBossReport()
+assert(queued and queued.text:find('Forces 2%',1,true) and queued.count==1,'post-deduction report not prepared/deduplicated')
+advance(2);ns.UI.Tick()
+assert(publicCalls==0,'timer/UI tick attempted public chat')
+assert(ForeverPlusFrame:IsShown() and ForeverPlusFrame.reportButton,'ready report did not expose click action')
+hardware=true;ForeverPlusFrame.reportButton.scripts.OnClick();hardware=false
+assert(publicCalls==1 and #reports==1 and reports[1].ch=='PARTY' and reports[1].msg==queued.text,'report did not send synchronously in click context')
+advance(2);ns.UI.Tick();assert(publicCalls==1,'attempted report was retried automatically')
+print('PASS full addon boss snapshot and synchronous hardware-click report; no boss/timer/OnUpdate public sends')
 -- Native PARTY_KILL is separate from CLEU and does not require a selected target.
 local noTargetExists,baseGUID=UnitExists,UnitGUID
 UnitExists=function(u) if u=='target' then return false end;return noTargetExists(u) end

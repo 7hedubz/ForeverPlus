@@ -11,6 +11,9 @@ local function boot(db)
  LE_PARTY_CATEGORY_INSTANCE=nil;Enum=nil
  IsInGroup=function(category) if category~=nil then return s.instanceGroup==true end return s.group==true end; IsInRaid=function() return s.raid==true end
  SendChatMessage=nil; C_ChatInfo=nil
+ UnitFullName=function(u) if u=='player' then return 'Tester','Realm' end local v=s.units[u] or {};return v.name,v.realm or 'Realm' end
+ GetNumSubgroupMembers=function() return s.group and 1 or 0 end
+ InCombatLockdown=function() return s.combat==true end
  GetInstanceInfo=function() return s.name,s.kind,1,'Normal',5,0,false,s.id end
  GetRealZoneText=function() return s.name end; GetSubZoneText=function() return s.sub end; GetMinimapZoneText=function() return '' end
  UnitName=function(u) if u=='player' then return 'Tester' end return (s.units[u] or {}).name end
@@ -311,65 +314,159 @@ test('debug reports combat log and visible credit state without exposing secret 
  local out=table.concat(messages,'\n');assert(out:find('CLEU',1,true) and out:find('live credits',1,true),'diagnostics unavailable')
  DEFAULT_CHAT_FRAME=nil
 end)
-test('boss posts remaining time and forces once per recorded boss in party chat',function()
- local s,n=boot();s.group=true;local sent={}
- SendChatMessage=function(msg,ch) sent[#sent+1]={msg=msg,ch=ch} end
- n.StartRun(n.DUNGEONS.rfc);s.clock=160
- for i=1,3 do s:kill(i) end
- s:kill('boss')
- n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL')
- eq(#sent,1);eq(sent[1].ch,'PARTY');assert(sent[1].msg:find('59:00',1,true));assert(sent[1].msg:find('Forces 6%',1,true));assert(sent[1].msg:find('1/4',1,true))
- n.OnCreatureDead(nil,11517,'Oggleflint','ENCOUNTER_END');n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(#sent,1)
- s.clock=100+n.LIMIT+300;n.OnCreatureDead(nil,11520,'Taragaman the Hungerer','BOSS_KILL')
- eq(#sent,2);assert(sent[2].msg:find('Overtime +5:00',1,true))
- local db=ForeverPlusDB;s,n=boot(db);s.group=true;SendChatMessage=function(msg,ch) sent[#sent+1]={msg=msg,ch=ch} end
- s:entry();n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(#sent,2)
+local function reportParty(s)
+ s.group=true;s.units.party1={name='Friend',realm='OtherRealm',player=true}
+end
+local function boss(s,name) s.event(nil,'BOSS_KILL',101,name or 'Oggleflint') end
+test('boss and deferred timers only prepare while hardware click sends one frozen snapshot',function()
+ local s,n=boot();reportParty(s);local calls,delivered=0,0;local timers={};local hardware=false
+ C_Timer.After=function(_,fn) timers[#timers+1]=fn end
+ SendChatMessage=function(text,ch) calls=calls+1;if hardware then delivered=delivered+1 end;eq(ch,'PARTY');assert(text:find('59:00',1,true));assert(text:find('Forces 6%',1,true)) end
+ n.StartRun(n.DUNGEONS.rfc);s.clock=160;for i=1,4 do s:kill(i) end;boss(s)
+ eq(calls,0);local pending=assert(n.GetPendingBossReport());eq(pending.count,1);eq(pending.canSend,true)
+ pending.text='mutated';eq(n.GetPendingBossReport().text~=pending.text,true)
+ C_Timer.After(0,function() C_Timer.After(0,function() s.tick() end) end)
+ while #timers>0 do table.remove(timers,1)() end
+ s.clock=400;s.event(nil,'PLAYER_DEAD');n.CompleteRun('manual');eq(calls,0)
+ hardware=true;eq(n.SendPendingBossReport(),true);hardware=false;eq(calls,1);eq(delivered,1);eq(n.GetPendingBossReport(),nil)
+ eq(n.SendPendingBossReport(),false);eq(calls,1)
 end)
-test('boss party reporting uses modern chat fallback but never reports solo raid or demo',function()
- local s,n=boot();s.group=true;local sent={}
- C_ChatInfo={SendChatMessage=function(msg,ch) sent[#sent+1]={msg=msg,ch=ch} end}
- n.StartRun(n.DUNGEONS.rfc);n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(#sent,1)
- s.group=false;n.OnCreatureDead(nil,11520,'Taragaman the Hungerer','BOSS_KILL');eq(#sent,1)
- s.group=true;s.raid=true;n.OnCreatureDead(nil,11518,'Jergosh the Invoker','BOSS_KILL');eq(#sent,1)
- n.AbandonRun('slash');n.ToggleDemo();n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(#sent,1)
+test('pending party identity and attempt are revalidated fail closed without sending',function()
+ for _,mode in ipairs({'reset','abandon','roster','realm','leave','raid','secretGroup','secretRaid','secretName','secretExists','secretSize','category','secretCategory','newattempt','reload'}) do
+  local s,n=boot();reportParty(s);LE_PARTY_CATEGORY_INSTANCE=2;local calls=0;SendChatMessage=function() calls=calls+1 end
+  n.StartRun(n.DUNGEONS.rfc);boss(s);assert(n.GetPendingBossReport())
+  if mode=='reset' then SlashCmdList.FOREVERPLUS('reset')
+  elseif mode=='abandon' then n.AbandonRun('slash')
+  elseif mode=='roster' then s.units.party1.name='Other'
+  elseif mode=='realm' then s.units.party1.realm='Different'
+  elseif mode=='leave' then s.group=false
+  elseif mode=='raid' then s.raid=true
+  elseif mode=='secretGroup' then IsInGroup=function() return secret end
+  elseif mode=='secretRaid' then IsInRaid=function() return secret end
+  elseif mode=='secretName' then s.units.party1.name=secret
+  elseif mode=='secretExists' then UnitExists=function() return secret end
+  elseif mode=='secretSize' then GetNumSubgroupMembers=function() return secret end
+  elseif mode=='category' then s.instanceGroup=true
+  elseif mode=='secretCategory' then IsInGroup=function(category) if category then return secret end return true end
+  elseif mode=='newattempt' then n.CompleteRun('manual');n.StartRun(n.DUNGEONS.rfc)
+  elseif mode=='reload' then s,n=boot(ForeverPlusDB);reportParty(s);s:entry() end
+  eq(n.SendPendingBossReport(),false);eq(calls,0);eq(n.GetPendingBossReport(),nil)
+ end
 end)
-test('boss report payload has no chat escapes or controls and stays within byte limit',function()
+test('combat blocks click and regen never resumes automatically',function()
+ local s,n=boot();reportParty(s);local calls=0;SendChatMessage=function() calls=calls+1 end
+ n.StartRun(n.DUNGEONS.rfc);boss(s);s.combat=true
+ eq(n.GetPendingBossReport().canSend,false);eq(n.SendPendingBossReport(),false);eq(calls,0)
+ s.combat=false;s.event(nil,'PLAYER_REGEN_ENABLED');s.tick();eq(calls,0);assert(n.GetPendingBossReport())
+ InCombatLockdown=function() return secret end;eq(n.SendPendingBossReport(),false);eq(calls,0)
+ InCombatLockdown=function() return false end;eq(n.SendPendingBossReport(),true);eq(calls,1)
+end)
+test('global first modern fallback and failed results retain head solely for manual retry',function()
+ for _,mode in ipairs({'nil','true','zero','false','nonzero','string','table','secret','error','secretError','extraSecret','extraError','modern','missing'}) do
+  local s,n=boot();reportParty(s);local calls,modern=0,0;local messages={}
+  DEFAULT_CHAT_FRAME={AddMessage=function(_,m) messages[#messages+1]=m end}
+  local function send()
+   calls=calls+1
+   if mode=='true' then return true elseif mode=='zero' then return 0 elseif mode=='false' then return false
+   elseif mode=='nonzero' then return 4 elseif mode=='string' then return 'ok' elseif mode=='table' then return {}
+   elseif mode=='secret' then return secret elseif mode=='error' then error('chat|blocked\nreason') elseif mode=='secretError' then error(secret)
+   elseif mode=='extraSecret' then return nil,secret elseif mode=='extraError' then return nil,'blocked' end
+  end
+  SendChatMessage=send;C_ChatInfo={SendChatMessage=function() modern=modern+1;return send() end}
+  if mode=='modern' then SendChatMessage=nil elseif mode=='missing' then SendChatMessage=nil;C_ChatInfo=nil end
+  n.StartRun(n.DUNGEONS.rfc);boss(s);local id=n.GetPendingBossReport().id;eq(calls,0)
+  local accepted=mode=='nil' or mode=='true' or mode=='zero' or mode=='modern'
+  eq(n.SendPendingBossReport(),accepted);eq(calls,mode=='missing' and 0 or 1);eq(modern,mode=='modern' and 1 or 0)
+  if accepted then eq(n.GetPendingBossReport(),nil) else
+   eq(n.GetPendingBossReport().id,id);boss(s);s.tick();s.event(nil,'PLAYER_REGEN_ENABLED');eq(calls,mode=='missing' and 0 or 1)
+   SendChatMessage=function() calls=calls+1 end;eq(n.SendPendingBossReport(),true);eq(n.GetPendingBossReport(),nil)
+  end
+  SlashCmdList.FOREVERPLUS('debug');local out=table.concat(messages,'\n');DEFAULT_CHAT_FRAME=nil
+  assert(out:find('delivery unverified',1,true));assert(not out:find('confirmed sent',1,true))
+ end
+end)
+test('preparation wakes hidden HUD and slash report synchronously sends only one FIFO line',function()
+ local s,n=boot();reportParty(s);local calls,shown,refresh=0,0,0;local hardware=false;local delivered=0
+ SendChatMessage=function(text) calls=calls+1;if hardware then delivered=delivered+1 end;assert(text:find(calls==1 and 'Oggleflint' or 'Taragaman',1,true)) end
+ n.StartRun(n.DUNGEONS.rfc);n.UI={Tick=function() end,Show=function() shown=shown+1 end,RefreshBossReport=function() refresh=refresh+1 end}
+ boss(s);boss(s,'Taragaman the Hungerer');boss(s);eq(calls,0);eq(shown,2);eq(refresh,2);eq(n.GetPendingBossReport().count,2)
+ hardware=true;SlashCmdList.FOREVERPLUS('report');hardware=false;eq(calls,1);eq(delivered,1);eq(n.GetPendingBossReport().count,1)
+ s.tick();eq(calls,1);hardware=true;SlashCmdList.FOREVERPLUS('report');hardware=false;eq(calls,2);eq(delivered,2)
+end)
+test('pending queue is bounded at eight preserves oldest and deduplicates required notifications',function()
+ local s,n=boot();reportParty(s);local sent={};SendChatMessage=function(text) sent[#sent+1]=text end
+ local r=n.StartRun(n.DUNGEONS.rfc);r.dungeon.bosses={}
+ for i=1,12 do r.dungeon.bosses[i]={n='Required '..i,id=70000+i} end
+ for i=1,12 do n.OnCreatureDead(nil,70000+i,'Required '..i,'BOSS_KILL');n.OnCreatureDead(nil,70000+i,'Required '..i,'ENCOUNTER_END') end
+ eq(#sent,0);eq(n.GetPendingBossReport().count,8);eq(n.CountBossesDown(r),12)
+ for i=1,8 do eq(n.SendPendingBossReport(),true);assert(sent[i]:find('Required '..i..' down',1,true)) end
+ eq(n.GetPendingBossReport(),nil);eq(n.SendPendingBossReport(),false);eq(#sent,8)
+end)
+test('completed report survives same-party zoning but explicit abandon still clears it',function()
+ local s,n=boot();reportParty(s);local calls=0;SendChatMessage=function() calls=calls+1 end
+ n.StartRun(n.DUNGEONS.rfc);boss(s);local id=n.GetPendingBossReport().id
+ n.CompleteRun('manual');s.kind='none';n.CheckZone('ZONE_CHANGED_NEW_AREA')
+ eq(n.GetPendingBossReport().id,id);eq(n.SendPendingBossReport(),true);eq(calls,1)
+ s.kind='party';n.CheckZone();boss(s);n.CompleteRun('manual');n.AbandonRun('slash');eq(n.GetPendingBossReport(),nil)
+end)
+test('pending readiness includes available API and release version is 1.2.1',function()
+ local s,n=boot();reportParty(s);n.StartRun(n.DUNGEONS.rfc);boss(s)
+ eq(n.GetPendingBossReport().canSend,false);eq(n.SendPendingBossReport(),false);assert(n.GetPendingBossReport())
+ C_ChatInfo={SendChatMessage=function() end};eq(n.GetPendingBossReport().canSend,true)
+ eq(n.SendPendingBossReport(),true);eq(n.ver,'1.2.1')
+end)
+test('known party categories route frozen lines and secret category preparation fails closed',function()
+ for _,mode in ipairs({'constant','enum','absent','secret','secretMembership'}) do
+  local s,n=boot();reportParty(s);s.instanceGroup=true;local calls=0
+  if mode=='constant' or mode=='secretMembership' then LE_PARTY_CATEGORY_INSTANCE=2
+  elseif mode=='enum' then Enum={PartyCategory={Instance=2}} elseif mode=='secret' then LE_PARTY_CATEGORY_INSTANCE=secret end
+  if mode=='secretMembership' then IsInGroup=function(category) if category then return secret end return true end end
+  SendChatMessage=function(text,ch) calls=calls+1;eq(ch,mode=='absent' and 'PARTY' or 'INSTANCE_CHAT') end
+  n.StartRun(n.DUNGEONS.rfc);boss(s);eq(calls,0)
+  if mode=='secret' or mode=='secretMembership' then eq(n.GetPendingBossReport(),nil);eq(n.SendPendingBossReport(),false)
+  else assert(n.GetPendingBossReport());eq(n.SendPendingBossReport(),true);eq(calls,1) end
+ end
+end)
+test('solo raid demo optional and unreadable roster cannot prepare public reports',function()
+ for _,mode in ipairs({'solo','raid','demo','optional','missingRoster','missingName','secretName','badGroup','badRaid'}) do
+  local s,n=boot();reportParty(s);local calls=0;SendChatMessage=function() calls=calls+1 end
+  if mode=='solo' then s.group=false elseif mode=='raid' then s.raid=true elseif mode=='missingRoster' then s.units.party1=nil
+  elseif mode=='missingName' then UnitFullName=nil elseif mode=='secretName' then s.units.party1.name=secret
+  elseif mode=='badGroup' then IsInGroup=function() return secret end elseif mode=='badRaid' then IsInRaid=function() error('restricted') end end
+  if mode=='demo' then n.ToggleDemo() else n.StartRun(n.DUNGEONS.rfc) end
+  boss(s,mode=='optional' and 'Optional Boss' or nil);eq(n.GetPendingBossReport(),nil);eq(n.SendPendingBossReport(),false);eq(calls,0)
+ end
+end)
+test('payload sanitation overtime and same-run wing refinement preserve immutable pending lines',function()
  for _,long in ipairs({false,true}) do
-  local s,n=boot();s.group=true;local sent={}
-  SendChatMessage=function(msg,ch) assert(not msg:find('[|%c]'),'unsafe chat escape or control');assert(#msg<=255);sent[#sent+1]=msg end
-  local r=n.StartRun(n.DUNGEONS.rfc);local b=r.dungeon.bosses[1]
-  if long then b.n=string.rep('X',300)..'|\n' end
-  n.OnCreatureDead(nil,b.id,b.n,'BOSS_KILL');eq(#sent,1)
+  local s,n=boot();reportParty(s);local sent={};SendChatMessage=function(text) assert(not text:find('[|%c]'));assert(#text<=255);sent[#sent+1]=text end
+  local r=n.StartRun(n.DUNGEONS.rfc);local b=r.dungeon.bosses[1];if long then b.n=string.rep('X',300)..'|\n' end
+  s.clock=100+n.LIMIT+300;n.OnCreatureDead(nil,b.id,b.n,'BOSS_KILL');local p=n.GetPendingBossReport();assert(p.text:find('Overtime +5:00',1,true))
+  s:kill(1);s.clock=s.clock+10;eq(n.GetPendingBossReport().text,p.text);eq(n.SendPendingBossReport(),true);eq(sent[1],p.text)
  end
+ local s,n=boot();reportParty(s);s.name='Scarlet Monastery';s.id=189;n.CheckZone();boss(s,'Houndmaster Loksey');local id=n.GetPendingBossReport().id
+ s.sub='Library';n.CheckZone();s.event(nil,'PLAYER_DEAD');s.kind='none';n.CheckZone();eq(n.GetPendingBossReport().id,id)
+ SendChatMessage=function() end;eq(n.SendPendingBossReport(),true)
 end)
-test('boss reports prefer modern API and route only known instance category to instance chat',function()
- for _,category in ipairs({'legacy','enum','absent'}) do
-  local s,n=boot();s.group=true;s.instanceGroup=true;local modern,legacy=0,0
-  if category=='legacy' then LE_PARTY_CATEGORY_INSTANCE=2 elseif category=='enum' then Enum={PartyCategory={Instance=2}} end
-  SendChatMessage=function() legacy=legacy+1;error('obsolete stub') end
-  C_ChatInfo={SendChatMessage=function(msg,ch) modern=modern+1;eq(ch,category=='absent' and 'PARTY' or 'INSTANCE_CHAT') end}
-  n.StartRun(n.DUNGEONS.rfc);n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(modern,1);eq(legacy,0)
- end
+test('observed roster change permanently prunes even if previous party returns before click',function()
+ local s,n=boot();reportParty(s);n.StartRun(n.DUNGEONS.rfc);boss(s)
+ s.units.party1.name='Replacement';s.event(nil,'GROUP_ROSTER_UPDATE');s.units.party1.name='Friend'
+ eq(n.GetPendingBossReport(),nil)
 end)
-test('boss report debug distinguishes skips acceptance and failures without exposing secret errors',function()
- for _,mode in ipairs({'solo','raid','missing','accepted','false','error','secret'}) do
-  local s,n=boot();s.group=mode~='solo';s.raid=mode=='raid';local messages={}
-  DEFAULT_CHAT_FRAME={AddMessage=function(_,msg) messages[#messages+1]=msg end}
-  if mode~='missing' then SendChatMessage=function()
-   if mode=='false' then return false elseif mode=='error' then error('chat|blocked\nreason') elseif mode=='secret' then error(secret) end
-  end end
-  n.StartRun(n.DUNGEONS.rfc);n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');SlashCmdList.FOREVERPLUS('debug')
-  local out=table.concat(messages,'\n');DEFAULT_CHAT_FRAME=nil
-  assert(out:find('Boss report',1,true),'missing report diagnostics')
-  local expected=({solo='not in group',raid='raid group',missing='API unavailable',accepted='delivery unverified', ['false']='API returned false',error='chatblocked reason',secret='restricted error'})[mode]
-  assert(out:find(expected,1,true),out)
- end
+test('diagnostics expose prepared manual action and never claim confirmed delivery',function()
+ local s,n=boot();reportParty(s);local messages={};DEFAULT_CHAT_FRAME={AddMessage=function(_,m) messages[#messages+1]=m end}
+ SendChatMessage=function() end;n.StartRun(n.DUNGEONS.rfc);boss(s);SlashCmdList.FOREVERPLUS('debug')
+ local out=table.concat(messages,'\n');assert(out:find('prepared',1,true));assert(out:find('manual',1,true))
+ messages={};n.SendPendingBossReport();SlashCmdList.FOREVERPLUS('debug');out=table.concat(messages,'\n')
+ assert(out:find('attempt returned normally',1,true));assert(out:find('delivery unverified',1,true));DEFAULT_CHAT_FRAME=nil
 end)
-test('chat send failure does not interrupt boss credit or retry duplicate public messages',function()
- local s,n=boot();s.group=true;local calls=0
- SendChatMessage=function() calls=calls+1;error('chat unavailable') end
- local r=n.StartRun(n.DUNGEONS.rfc);n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL')
- eq(n.CountBossesDown(r),1);n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(calls,1)
+test('final automatic completion keeps boss-time after-deduction report available',function()
+ local s,n=boot();reportParty(s);local sent={};SendChatMessage=function(text) sent[#sent+1]=text end
+ local r=n.StartRun(n.DUNGEONS.rfc);for i=1,50 do s:kill(i) end
+ for i,b in ipairs(r.dungeon.bosses) do s.clock=100+i*10;s:kill('boss');s.event(nil,'BOSS_KILL',100+i,b.n) end
+ eq(r.complete,true);eq(r.kills,50);eq(#sent,0);eq(n.GetPendingBossReport().count,4)
+ s.clock=1000;for i=1,4 do eq(n.SendPendingBossReport(),true) end
+ assert(sent[4]:find('59:20',1,true));assert(sent[4]:find('Forces 100%',1,true));assert(sent[4]:find('Bosses 4/4',1,true))
 end)
 test('unit health handles its visible unit without rescanning every nameplate',function()
  local s,n=boot();n.StartRun(n.DUNGEONS.rfc);local scans=0

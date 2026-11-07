@@ -172,10 +172,19 @@ function UI.Init()
     abandon:SetScript("OnClick", function() UI.RequestAbandon() end)
     abandon:SetEnabled(false)
     frame.abandonButton = abandon
-    local persistence = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    persistence:SetPoint("LEFT", abandon, "RIGHT", 10, 0)
-    persistence:SetWidth(164)
-    persistence:SetText("Continues through death\nand zone changes")
+    local report = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    report:SetSize(164, 24)
+    report:SetPoint("LEFT", abandon, "RIGHT", 10, 0)
+    report:SetText("Send report")
+    report:SetEnabled(false)
+    report:SetScript("OnClick", function()
+        -- Stay in the hardware click context: never defer the actual send.
+        if ns.SendPendingBossReport then ns.SendPendingBossReport() end
+        UI.RefreshBossReport()
+    end)
+    report:SetScript("OnEnter", function(self) UI.ReportTooltip(self) end)
+    report:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    frame.reportButton = report
 
     frame:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
@@ -239,6 +248,30 @@ end
 local function SyncRuns()
     if ns.Sync and ns.Sync.Request then ns.Sync.Request("manual") end
     UI.RefreshBoard()
+end
+
+-- Reading availability only prepares UI; only click handlers send public chat.
+function UI.RefreshBossReport()
+    if not frame then return end
+    local pending = ns.GetPendingBossReport and ns.GetPendingBossReport()
+    frame.reportButton:SetEnabled(pending ~= nil and pending.canSend == true)
+    if pending then
+        local count = type(pending.count) == "number" and pending.count or 1
+        frame.reportButton:SetText((pending.canSend and "Send report (" or "Report waiting (") .. count .. ")")
+    else frame.reportButton:SetText("Send report") end
+end
+
+function UI.ReportTooltip(anchor)
+    local pending = ns.GetPendingBossReport and ns.GetPendingBossReport()
+    GameTooltip:SetOwner(anchor, "ANCHOR_BOTTOM")
+    GameTooltip:AddLine("Boss report", 1, 0.82, 0.2)
+    if pending then
+        GameTooltip:AddLine(SafeText(pending.text), 1, 1, 1, true)
+        GameTooltip:AddLine("Channel: " .. SafeText(pending.channel), 0.7, 0.7, 0.7)
+        GameTooltip:AddLine(SafeText(pending.status), 0.7, 0.7, 0.7, true)
+    else GameTooltip:AddLine("No boss reports waiting.", 0.7, 0.7, 0.7) end
+    GameTooltip:AddLine("Click out of combat to attempt one report. No automatic sends or retries.", 1, 1, 1, true)
+    GameTooltip:Show()
 end
 
 -- This panel is independent of HUD visibility, so incoming votes remain visible.
@@ -547,7 +580,7 @@ function UI.ToggleMinimapMenu(anchor)
     local menu = UI.minimapMenu
     if not menu then
         menu = CreateFrame("Frame", "ForeverPlusMinimapMenu", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
-        menu:SetSize(190, 172)
+        menu:SetSize(190, 202)
         menu:SetFrameStrata("TOOLTIP")
         menu:SetClampedToScreen(true)
         MakeBackdrop(menu, 0.03, 0.03, 0.06, 0.99)
@@ -563,7 +596,11 @@ function UI.ToggleMinimapMenu(anchor)
         menu.syncButton = item("Sync runs", 2, SyncRuns)
         menu.lockButton = item("Lock / unlock timer", 3, function() DB().locked = not DB().locked end)
         menu.abandonButton = item("Abandon run...", 4, function() UI.RequestAbandon() end)
-        item("Close", 5, function() end)
+        menu.reportButton = item("Send boss report", 5, function()
+            if ns.SendPendingBossReport then ns.SendPendingBossReport() end
+            UI.RefreshBossReport()
+        end)
+        item("Close", 6, function() end)
         menu:Hide()
         UI.minimapMenu = menu
     end
@@ -648,6 +685,7 @@ function UI.OnComplete(run)
 end
 
 function UI.Tick()
+    UI.RefreshBossReport()
     UI.RefreshVote()
     if frame then
         local current = ns.GetRun()

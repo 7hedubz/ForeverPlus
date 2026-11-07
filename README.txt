@@ -1,8 +1,8 @@
-ForeverPlus 1.2.0 — WoW Forever dungeon timer and run journal
+ForeverPlus 1.2.1 — WoW Forever dungeon timer and run journal
 ============================================================
 Author: DoHeal. Interface16001 / Camelot.
 Install in _forever_/Interface/AddOns/ForeverPlus.
-From 1.1.0-1.1.4: /reload. New install or upgrade from before1.1.0: relaunch.
+From 1.1.0-1.2.0: /reload. New install or upgrade from before1.1.0: relaunch.
 
 DUNGEON JOURNAL
 /fplus opens dungeon -> individual run -> roster, damage/healing, deaths.
@@ -49,12 +49,23 @@ One hour; +3 through36:00, +2 through48:00, +1 through60:00. Overtime continues.
 Auto-complete requires all configured bosses plus100% non-boss forces.
 Unknown/empty boss rosters require /fplus complete. Exact names/aliases and
 verified death can identify bosses with restricted GUIDs; disappearance alone
-never counts. Each new required boss posts remaining time/overtime, current
-forces after boss deduction, and boss progress to PARTY/INSTANCE_CHAT as
-appropriate. Reports use plain-text separators, not invalid pipe escapes.
-/fplus debug shows chat attempts/errors; API acceptance is not proof of
-delivery. No solo/raid/demo
-reports; no duplicate boss-event reports. No cross-client announcer election.
+never counts. Each new required boss PREPARES a time/forces/progress snapshot.
+Click HUD Send report (N), minimap Send boss report, or type /fplus report
+OUT OF COMBAT. Each click/command attempts ONE pending line synchronously;
+boss callbacks, timers, UI ticks and combat-end events NEVER send public chat.
+Direct guild /run worked in the client while a delayed identical call silently
+did not deliver despite pcall true/nil, so sends must stay in player context.
+The direct test does not prove party delivery; check actual chat after clicking.
+PARTY/INSTANCE_CHAT is selected for the current group category. Plain-text
+payloads have no invalid pipes. Global API first, modern availability fallback.
+No automatic retry/fallback after a send. Rejected calls retain the report for
+manual retry. A normal nil return consumes the attempted line, NOT proof of
+delivery. /fplus debug shows cumulative attempts/errors and last status, with
+delivery unverified. The HUD report button shows how many lines are pending.
+Report snapshots are session-only and bounded; reset/abandon/new attempt,
+party context changes or reload discard stale reports. Completion permits
+its final queued snapshot. No solo/raid/demo reports or duplicate boss-event
+reports; no cross-client announcer election.
 
 STATS AND DEATHS
 Damage excludes overkill, healing excludes overhealing, known pets attribute
@@ -75,7 +86,8 @@ Shared stats remain unverified observations. Personal bests stay separate.
 COMMANDS
 /fplus                 dungeon journal
 /fplus sync            participant run synchronization
-/fplus debug           native notification / boss-deduction ledger diagnostics
+/fplus debug           native ledger and public-report attempt diagnostics
+/fplus report          directly attempt one pending boss report out of combat
 /fplus lock            toggle timer dragging
 /fplus reset           archive reset attempt, restart timer/objectives/ledger
 /fplus complete        force-complete real run
@@ -83,7 +95,7 @@ COMMANDS
 /fplus times           print personal bests and toggle journal
 /fplus share           legacy personal-best sharing
 /fplus demo or /demo   unsaved practice timer
-Minimap left-click: timer. Right-click: history / sync / lock / abandon menu.
+Minimap left-click: timer. Right-click: history / sync / lock / abandon / report.
 
 TESTS
 python3 tests/run.py requires Python3, LuaJIT, luac. Mocked-API tests do not

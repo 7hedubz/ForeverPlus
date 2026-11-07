@@ -3,7 +3,7 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.2.0"
+ns.ver = "1.2.1"
 
 local LIMIT = ns.LIMIT
 local Secret = ns.IsSecret
@@ -91,9 +91,11 @@ end
 ns.DB = DB
 
 local run -- current timed run
+local pendingReports = {}
 -- Session-local identity: reload also discards all abandon votes/offers.
 local attemptGeneration = 0
 local function NextAttempt()
+    pendingReports = {}
     attemptGeneration = attemptGeneration + 1
     return attemptGeneration
 end
@@ -280,6 +282,7 @@ function ns.AbandonRun(reason)
         return -- practice never owns the saved real-session marker
     end
     if reason ~= "slash" and reason ~= "vote" then return end
+    pendingReports = {}
     if run and run.complete and not run.practice then
         if ns.UI then ns.UI.HideSoon() end
         return
@@ -481,20 +484,62 @@ local function ChatError(value)
     if type(value) ~= "string" then return "unavailable error" end
     return value:gsub("|", ""):gsub("%c", " "):sub(1, 160)
 end
+-- Session-local: pending reports intentionally do not survive reload.
+local reportID = 0
+-- A full-name roster plus party category, not GUIDs or mutable dungeon keys.
+local function ReportParty()
+    if Read(IsInGroup) ~= true or Read(IsInRaid) ~= false then return nil end
+    local category = LE_PARTY_CATEGORY_INSTANCE
+    if Secret(category) or Secret(Enum) then return nil end
+    if category == nil and type(Enum) == "table" then
+        if Secret(Enum.PartyCategory) then return nil end
+        if type(Enum.PartyCategory) == "table" then category = Enum.PartyCategory.Instance end
+    end
+    if Secret(category) then return nil end
+    local channel = "PARTY"
+    if category ~= nil then
+        if not Number(category) then return nil end
+        local instance = Read(IsInGroup,category)
+        if type(instance) ~= "boolean" then return nil end
+        channel = instance and "INSTANCE_CHAT" or "PARTY"
+    end
+    local count = Read(GetNumSubgroupMembers)
+    if not Number(count) or count < 1 or count > 4 or count ~= math.floor(count) then return nil end
+    local names = {}
+    for i=0,count do
+        local unit = i == 0 and "player" or ("party" .. i)
+        if i > 0 and Read(UnitExists,unit) ~= true then return nil end
+        if Secret(UnitFullName) or type(UnitFullName) ~= "function" then return nil end
+        local ok,name,realm = pcall(UnitFullName,unit)
+        if not ok or Secret(name) or type(name) ~= "string" or name == "" or Secret(realm) then return nil end
+        if realm == nil or realm == "" then realm = Read(GetNormalizedRealmName) or Read(GetRealmName) end
+        if type(realm) ~= "string" or realm == "" then return nil end
+        names[#names+1] = name .. "-" .. realm:gsub("%s+", "")
+    end
+    table.sort(names)
+    return channel .. ":" .. table.concat(names,";"),channel
+end
+local function PruneReports()
+    if #pendingReports == 0 then return end
+    local fingerprint = ReportParty()
+    for i=#pendingReports,1,-1 do
+        local item = pendingReports[i]
+        -- Completion/zone departure can retire the live run without starting a
+        -- new attempt. Its frozen report still belongs to this party/session.
+        if item.generation ~= attemptGeneration or item.generation ~= item.run.attemptGeneration
+            or (run and item.run ~= run)
+            or (not run and not item.run.complete) or item.party ~= fingerprint then
+            table.remove(pendingReports,i)
+        end
+    end
+end
 local function PostBossProgress(bossName, down, total)
     if not run or run.practice then ReportSkip("no real run"); return end
-    if Read(IsInGroup) ~= true then ReportSkip("not in group"); return end
-    if Read(IsInRaid) == true then ReportSkip("raid group"); return end
-    -- Modern namespace first; the legacy global can be an obsolete client stub.
-    local send = C_ChatInfo and C_ChatInfo.SendChatMessage
-    local api = "C_ChatInfo.SendChatMessage"
-    if type(send) ~= "function" then send, api = SendChatMessage, "SendChatMessage" end
-    if type(send) ~= "function" then ReportSkip("API unavailable"); return end
-    local category = LE_PARTY_CATEGORY_INSTANCE
-    if not Number(category) and type(Enum) == "table" and type(Enum.PartyCategory) == "table" then
-        category = Enum.PartyCategory.Instance
-    end
-    local channel = Number(category) and Read(IsInGroup, category) == true and "INSTANCE_CHAT" or "PARTY"
+    PruneReports()
+    local party,channel = ReportParty()
+    if not party then ReportSkip("invalid party roster"); return end
+    -- Preserve the oldest snapshots; overflow never triggers a send or burst.
+    if #pendingReports >= 8 then ReportSkip("pending queue full"); return end
     local clock, overtime = ns.FormatClock(Elapsed(run), LIMIT)
     local label = overtime and ("Overtime " .. clock) or ("Time remaining " .. clock)
     if Secret(bossName) or type(bossName) ~= "string" then bossName = "Boss" end
@@ -505,18 +550,57 @@ local function PostBossProgress(bossName, down, total)
     end
     local text = message(bossName)
     if #text > 255 then text = message("Boss") end
-    -- One attempt only: a void return is normal API acceptance, not delivery
-    -- confirmation. Never retry or fall through to another API and duplicate it.
-    bossReport.attempts = bossReport.attempts + 1
-    local ok, result = pcall(send, text, channel)
-    if not ok or (not Secret(result) and result == false) then
-        bossReport.failures = bossReport.failures + 1
-        bossReport.status = "failed " .. api .. " " .. channel .. ": " .. (ok and "API returned false" or ChatError(result))
-        Print("Boss report " .. bossReport.status)
-    else
-        bossReport.accepted = bossReport.accepted + 1
-        bossReport.status = "accepted by " .. api .. " " .. channel .. "; delivery unverified"
+    reportID = reportID + 1
+    bossReport.status = "prepared; awaiting manual click or /fplus report"
+    pendingReports[#pendingReports + 1] = {id=reportID, text=text, channel=channel, status="prepared", run=run, generation=run.attemptGeneration, party=party}
+    if ns.UI then
+        if type(ns.UI.Show) == "function" then ns.UI.Show() end
+        if type(ns.UI.RefreshBossReport) == "function" then ns.UI.RefreshBossReport() end
     end
+end
+local function ReportAPI()
+    if not Secret(SendChatMessage) and type(SendChatMessage) == "function" then return SendChatMessage,"SendChatMessage" end
+    if not Secret(C_ChatInfo) and type(C_ChatInfo) == "table" then
+        local send = C_ChatInfo.SendChatMessage
+        if not Secret(send) and type(send) == "function" then return send,"C_ChatInfo.SendChatMessage" end
+    end
+end
+function ns.GetPendingBossReport()
+    PruneReports()
+    local head = pendingReports[1]
+    if not head then return nil end
+    return {id=head.id, text=head.text, channel=head.channel, count=#pendingReports, canSend=Read(InCombatLockdown) == false and ReportAPI() ~= nil, status=head.status}
+end
+function ns.SendPendingBossReport()
+    PruneReports()
+    local head = pendingReports[1]
+    if not head then return false end
+    if Read(InCombatLockdown) ~= false then
+        head.status = "blocked: combat or unknown combat state; manual retry"
+        bossReport.status = head.status
+        return false
+    end
+    local send,api = ReportAPI()
+    if type(send) ~= "function" then ReportSkip("API unavailable");return false end
+    bossReport.attempts = bossReport.attempts + 1
+    -- Inspect the complete return tuple without coercing restricted values.
+    local function returns(...) return {n=select("#",...), ...} end
+    local results = returns(pcall(send,head.text,head.channel))
+    local ok,result = results[1],results[2]
+    local unexpected = false
+    for i=3,results.n do
+        if Secret(results[i]) or results[i] ~= nil then unexpected = true end
+    end
+    if not ok or Secret(result) or unexpected or (result ~= nil and result ~= true and result ~= 0) then
+        bossReport.failures = bossReport.failures + 1
+        head.status = "failed " .. api .. ": " .. (ok and "unexpected API return; manual retry" or ChatError(result))
+        bossReport.status = head.status
+        return false
+    end
+    table.remove(pendingReports,1)
+    bossReport.accepted = bossReport.accepted + 1
+    bossReport.status = "attempt returned normally via " .. api .. "; delivery unverified"
+    return true
 end
 
 function ns.OnCreatureDead(guid, npcId, name, source, encounterID)
@@ -767,6 +851,7 @@ f:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "GROUP_ROSTER_UPDATE" then
+        PruneReports()
         if ns.History then ns.History.Roster(run); Persist() end
         if ns.Comm then ns.Comm.OnRoster() end
         if ns.Sync then ns.Sync.OnRoster() end
@@ -870,6 +955,10 @@ SlashCmdList.FOREVERPLUS = function(msg)
     msg = (msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
     if msg == "" or msg == "toggle" then
         if ns.UI then ns.UI.ToggleBoard() end
+        return
+    end
+    if msg == "report" then
+        ns.SendPendingBossReport()
         return
     end
     if msg == "lock" then
@@ -980,7 +1069,7 @@ SlashCmdList.FOREVERPLUS = function(msg)
     end
     if msg == "help" then
         Print("/fplus — open dungeon journal")
-        Print("/fplus lock | reset | complete | abandon | times | share | sync | demo | debug")
+        Print("/fplus lock | reset | complete | abandon | report | times | share | sync | demo | debug")
         return
     end
     Print("Unknown command. /fplus help")
