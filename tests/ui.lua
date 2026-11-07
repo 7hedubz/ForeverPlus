@@ -191,17 +191,17 @@ local goodVote=ns.UI.RefreshVote
 ns.UI.RefreshVote=function() error('injected vote panel failure') end
 ns.GetBest=function() error('injected best lookup failure') end
 run={key='rfc',name='Ragefire Chasm',active=true,kills=1,deaths=0,dungeon=ns.DUNGEONS.rfc,bossDown={}}
-ns.FORCE_PER_KILL=0.5
+assert(ns.FORCE_PER_KILL==1.2,'uniform forces rate not 1.2%')
 ns.UI.Show()
 local ok=pcall(ns.UI.Tick)
 assert(ok,'optional vote/history failure aborted HUD tick')
-assert(ForeverPlusFrame.obj.text:find('Forces 0.5%',1,true),'fractional forces did not update after optional failure')
+assert(ForeverPlusFrame.obj.text:find('Forces 1.2%',1,true),'fractional forces did not update after optional failure')
 local display=assert(ns.UI.GetDisplayDiagnostics(),'display diagnostics unavailable')
-assert(display.forces==0.5 and display.lastUpdated==GetTime(),'display diagnostics do not describe actual refresh')
+assert(display.forces==1.2 and display.lastUpdated==GetTime(),'display diagnostics do not describe actual refresh')
 assert(display.text==ForeverPlusFrame.obj.text,'debug display snapshot differs from rendered text')
 assert(#refreshErrors>=2,'optional failures were silently swallowed instead of recorded')
 run.kills=2;ns.UI.Tick()
-assert(ForeverPlusFrame.obj.text:find('Forces 1%',1,true),'HUD did not continue refreshing after recurring failure')
+assert(ForeverPlusFrame.obj.text:find('Forces 2.4%',1,true),'HUD did not continue refreshing after recurring failure')
 assert(sends==2,'refresh recovery emitted public chat')
 ns.UI.RefreshVote=goodVote;ns.GetBest=function() return nil end
 run=nil;ns.UI.Tick();display=ns.UI.GetDisplayDiagnostics()

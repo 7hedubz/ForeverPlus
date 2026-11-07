@@ -3,7 +3,7 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.3.0"
+ns.ver = "1.3.1"
 
 local LIMIT = ns.LIMIT
 local Secret = ns.IsSecret
@@ -300,7 +300,7 @@ function ns.StartRun(dungeon, reason)
     Persist()
     if ns.UI then ns.UI.Show() end
     if not run.practice then
-        Print(string.format("Key started: |cffffd100%s|r — 1:00:00. Kill every standard boss and 200 mobs (0.5%% each) to time it.", run.name))
+        Print(string.format("Key started: |cffffd100%s|r — 1:00:00. Kill every standard boss and 84 mobs (1.2%% each) to time it.", run.name))
         if dungeon.manual then
             Print("Boss list is incomplete for this dungeon. Type |cffffd100/fplus complete|r if the tracker can't see a kill.")
         end

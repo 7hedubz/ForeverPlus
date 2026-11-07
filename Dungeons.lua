@@ -6,11 +6,11 @@ ns.PLUS3 = 2160 -- 36:00
 ns.PLUS2 = 2880 -- 48:00
 ns.PLUS1 = 3600 -- 60:00
 ns.PREFIX = "ForeverPlus" -- addon comm prefix, <= 16 chars
-ns.FORCE_PER_KILL = 0.5
+ns.FORCE_PER_KILL = 1.2
 
 -- Recommended level bands: installed ForeverGuide/DungeonData.lua, not admission limits.
 -- Clear = every standard boss in `bosses` plus 100% enemy forces.
--- Each creature kill is 2% (50 kills = 100%). Rares / optionals are omitted.
+-- Each net non-boss kill is 1.2% (84 kills reach the 100% cap). Rares / optionals are omitted.
 -- /fplus complete still force-ends. Shaper's Terrace has no published roster yet.
 
 ns.DUNGEONS = {
@@ -880,7 +880,7 @@ end
 
 function ns.ForcesPercent(run)
     if not run then return 0 end
-    local pct = (run.kills or 0) * (ns.FORCE_PER_KILL or 0.5)
+    local pct = (run.kills or 0) * (ns.FORCE_PER_KILL or 1.2)
     if pct > 100 then return 100 end
     return pct
 end

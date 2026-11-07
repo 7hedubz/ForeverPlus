@@ -1,10 +1,10 @@
 # ForeverPlus
 
-Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.3.0**, Interface `16001` (Camelot).
+Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.3.1**, Interface `16001` (Camelot).
 
 ## Install / upgrade
 
-Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.2.1 to 1.3.0** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
+Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.3.0 to 1.3.1** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
 
 ## Dungeon journal
 
@@ -45,7 +45,7 @@ Example: you record a dungeon with a friend who has no addon. After they install
 
 Enter a 5-man dungeon to start a one-hour timer. Rewards are **+3 through 36:00**, **+2 through 48:00**, **+1 through 60:00**. Overtime keeps counting and depleted completions still record a time.
 
-Automatic completion requires **all configured required bosses plus 100% enemy forces**: each native party-kill notification contributes 0.5%, with recognized bosses deducted (200 net non-boss notifications). Bosses do not contribute forces. Empty/unverified rosters, such as Shaper's Terrace and unknown dungeons, are manual-only. If a required kill is unavailable to the client, `/fplus complete` is the explicit override.
+Automatic completion requires **all configured required bosses plus 100% enemy forces**: each native party-kill notification contributes 1.2%, with recognized bosses deducted (84 net non-boss notifications). Bosses do not contribute forces. Empty/unverified rosters, such as Shaper's Terrace and unknown dungeons, are manual-only. If a required kill is unavailable to the client, `/fplus complete` is the explicit override.
 
 ### Run lifetime and explicit abandon
 
@@ -59,7 +59,7 @@ Explicit abandonment archives one abandoned attempt and does not immediately aut
 
 ### Any-mob forces and boss reports
 
-Forces now use the requested **event-counting policy**: each native **PARTY_KILL** notification received during an active real party-instance run adds one kill (0.5%), even when its payload is secret, absent, or unreadable. No selected target, readable GUID, threat, or tap/hostility check is required. Native notifications are the only force-count source; legacy combat-log deaths and visible corpse scans cannot add another force kill.
+Forces now use the requested **event-counting policy**: each native **PARTY_KILL** notification received during an active real party-instance run adds one kill (1.2%), even when its payload is secret, absent, or unreadable. No selected target, readable GUID, threat, or tap/hostility check is required. Native notifications are the only force-count source; legacy combat-log deaths and visible corpse scans cannot add another force kill.
 
 **Bosses are excluded:** recognized boss deaths are deducted once from the native notification total. Required-boss name/alias matching, BOSS_KILL, and successful ENCOUNTER_END signals share exclusion state to avoid subtracting duplicate notifications. Known optional/unknown-roster boss signals are excluded too. Arrival before or after a native notification must converge to the same net count; forces may adjust downward when a boss notification arrives later.
 
@@ -75,9 +75,9 @@ Boss tracking remains independent of force GUID eligibility: exact readable name
 
 HUD timer/objectives refresh independently of optional history scanning, boss scanning, report/vote panels, best/death extras, and journal status. Failures are isolated by stage, counted and safely recorded rather than silently freezing the forces display; there is no automatic public-chat send in recovery. Native kill changes also request an immediate safe HUD refresh. `/fplus debug` includes refresh health and the actual displayed HUD snapshot/age to distinguish current core values, stale renderings and old chat snapshots.
 
-The global **0.5% per counted non-boss event** rate requires **200 net kills**. The timer and raw kill ledger are retained on upgrade; an ongoing run's percentage is recalculated at the new rate, not preserved at the old 2% figure. Existing completed runs are not reopened, and saved PB/history records are not rewritten. Half-percent values are shown without truncation in HUD, chat and debug.
+The uniform **1.2% per counted non-boss event** rate requires **84 net kills** (83 = 99.6%; 84 is capped at 100%). There are no dungeon exceptions, including RFC, Excavation Site: Wetlands, and SFK. The timer and raw kill ledger are retained on upgrade; an ongoing run's percentage is recalculated at the new rate, not preserved at the previous rate. Existing completed runs are not reopened, and saved PB/history records are not rewritten. Fractional values are shown without truncation in HUD, chat and debug.
 
-A flat 200-kill requirement may be unattainable on short dungeons, individual wings or skip-heavy routes. There is no verified per-dungeon Forever population table bundled with this addon, so no per-dungeon safety guarantee or automatic scaling is claimed. Use `/fplus complete` for an explicit manual completion if all available content is exhausted below the target. Dungeon-specific quotas would be a separate balancing change.
+A flat 84-kill requirement may be unattainable on short dungeons, individual wings or skip-heavy routes. There is no verified per-dungeon Forever population table bundled with this addon, so no per-dungeon safety guarantee or automatic scaling is claimed. Use `/fplus complete` for an explicit manual completion if all available content is exhausted below the target. Dungeon-specific quotas would be a separate balancing change.
 
 ### Click-to-send boss reports
 
