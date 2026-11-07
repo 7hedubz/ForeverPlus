@@ -8,6 +8,7 @@ ns.PLUS1 = 3600 -- 60:00
 ns.PREFIX = "ForeverPlus" -- addon comm prefix, <= 16 chars
 ns.FORCE_PER_KILL = 2
 
+-- Recommended level bands: installed ForeverGuide/DungeonData.lua, not admission limits.
 -- Clear = every standard boss in `bosses` plus 100% enemy forces.
 -- Each creature kill is 2% (50 kills = 100%). Rares / optionals are omitted.
 -- /fplus complete still force-ends. Shaper's Terrace has no published roster yet.
@@ -15,6 +16,7 @@ ns.FORCE_PER_KILL = 2
 ns.DUNGEONS = {
     rfc = {
         name = "Ragefire Chasm",
+        levelMin = 13, levelMax = 18,
         instanceIDs = {389},
         names = {"ragefire chasm"},
         lastBosses = {"Bazzalan"},
@@ -28,6 +30,7 @@ ns.DUNGEONS = {
     },
     thanes = {
         name = "Hall of Thanes",
+        levelMin = 13, levelMax = 18,
         instanceIDs = {},
         names = {"hall of thanes", "the hall of thanes"},
         lastBosses = {"Durgen Dirgehammer"},
@@ -41,6 +44,7 @@ ns.DUNGEONS = {
     },
     lordaeron = {
         name = "Ruins of Lordaeron",
+        levelMin = 15, levelMax = 20,
         instanceIDs = {},
         names = {"ruins of lordaeron"},
         lastBosses = {"Rath'mael"},
@@ -56,6 +60,7 @@ ns.DUNGEONS = {
     },
     wc = {
         name = "Wailing Caverns",
+        levelMin = 17, levelMax = 24,
         instanceIDs = {43},
         names = {"wailing caverns"},
         lastBosses = {"Mutanus the Devourer", "Mutanus"},
@@ -71,6 +76,7 @@ ns.DUNGEONS = {
     },
     dm = {
         name = "The Deadmines",
+        levelMin = 17, levelMax = 26,
         instanceIDs = {36},
         names = {"the deadmines", "deadmines"},
         lastBosses = {"Edwin VanCleef", "VanCleef"},
@@ -86,6 +92,7 @@ ns.DUNGEONS = {
     },
     sfk = {
         name = "Shadowfang Keep",
+        levelMin = 22, levelMax = 30,
         instanceIDs = {33},
         names = {"shadowfang keep"},
         lastBosses = {"Archmage Arugal", "Arugal"},
@@ -103,6 +110,7 @@ ns.DUNGEONS = {
     },
     excavation = {
         name = "Excavation Site: Wetlands",
+        levelMin = 26, levelMax = 31,
         instanceIDs = {},
         names = {"excavation site", "excavation site: wetlands", "whelgar"},
         lastBosses = {"Relic Guardian"},
@@ -116,6 +124,7 @@ ns.DUNGEONS = {
     },
     bfd = {
         name = "Blackfathom Deeps",
+        levelMin = 24, levelMax = 32,
         instanceIDs = {48},
         names = {"blackfathom deeps"},
         lastBosses = {"Aku'mai"},
@@ -132,6 +141,7 @@ ns.DUNGEONS = {
     },
     stocks = {
         name = "The Stockade",
+        levelMin = 24, levelMax = 32,
         instanceIDs = {34},
         names = {"the stockade", "stormwind stockade", "stockade"},
         lastBosses = {"Bazil Thredd", "Dextren Ward"},
@@ -146,6 +156,7 @@ ns.DUNGEONS = {
     },
     dalaran = {
         name = "City of Dalaran",
+        levelMin = 28, levelMax = 33,
         instanceIDs = {},
         names = {"city of dalaran", "dalaran"},
         lastBosses = {"Shade of the Archmage"},
@@ -162,6 +173,7 @@ ns.DUNGEONS = {
     },
     rfk = {
         name = "Razorfen Kraul",
+        levelMin = 29, levelMax = 38,
         instanceIDs = {47},
         names = {"razorfen kraul"},
         lastBosses = {"Charlga Razorflank"},
@@ -177,6 +189,7 @@ ns.DUNGEONS = {
     },
     gnomer = {
         name = "Gnomeregan",
+        levelMin = 29, levelMax = 38,
         instanceIDs = {90},
         names = {"gnomeregan"},
         lastBosses = {"Mekgineer Thermaplugg", "Thermaplugg"},
@@ -191,6 +204,7 @@ ns.DUNGEONS = {
     },
     smgy = {
         name = "Scarlet Monastery — Graveyard",
+        levelMin = 30, levelMax = 38,
         instanceIDs = {189},
         names = {"scarlet monastery"},
         lastBosses = {"Bloodmage Thalnos", "Thalnos"},
@@ -203,6 +217,7 @@ ns.DUNGEONS = {
     },
     smlib = {
         name = "Scarlet Monastery — Library",
+        levelMin = 33, levelMax = 41,
         instanceIDs = {189, 1001},
         names = {"scarlet monastery"},
         lastBosses = {"Arcanist Doan", "Doan"},
@@ -215,6 +230,7 @@ ns.DUNGEONS = {
     },
     smarm = {
         name = "Scarlet Monastery — Armory",
+        levelMin = 36, levelMax = 44,
         instanceIDs = {189, 1004},
         names = {"scarlet monastery"},
         lastBosses = {"Herod"},
@@ -226,6 +242,7 @@ ns.DUNGEONS = {
     },
     smcath = {
         name = "Scarlet Monastery — Cathedral",
+        levelMin = 38, levelMax = 46,
         instanceIDs = {189, 1004},
         names = {"scarlet monastery"},
         lastBosses = {"High Inquisitor Whitemane", "Whitemane"},
@@ -238,6 +255,7 @@ ns.DUNGEONS = {
     },
     drowned = {
         name = "The Drowned City",
+        levelMin = 35, levelMax = 40,
         instanceIDs = {},
         names = {"the drowned city", "drowned city"},
         lastBosses = {"Min'loth the Serpent", "Min'loth"},
@@ -251,6 +269,7 @@ ns.DUNGEONS = {
     },
     rfd = {
         name = "Razorfen Downs",
+        levelMin = 37, levelMax = 46,
         instanceIDs = {129},
         names = {"razorfen downs"},
         lastBosses = {"Amnennar the Coldbringer", "Amnennar"},
@@ -264,6 +283,7 @@ ns.DUNGEONS = {
     },
     kroldok = {
         name = "Krol'dok Stronghold",
+        levelMin = 40, levelMax = 45,
         instanceIDs = {},
         names = {"krol'dok stronghold", "kroldok stronghold", "krol'dok"},
         lastBosses = {"Overlord Mugg"},
@@ -274,6 +294,7 @@ ns.DUNGEONS = {
     },
     ulda = {
         name = "Uldaman",
+        levelMin = 41, levelMax = 51,
         instanceIDs = {70},
         names = {"uldaman"},
         lastBosses = {"Archaedas"},
@@ -290,6 +311,7 @@ ns.DUNGEONS = {
     },
     zf = {
         name = "Zul'Farrak",
+        levelMin = 44, levelMax = 54,
         instanceIDs = {209},
         names = {"zul'farrak", "zulfarrak"},
         lastBosses = {"Chief Ukorz Sandscalp", "Ukorz Sandscalp", "Ukorz"},
@@ -308,6 +330,7 @@ ns.DUNGEONS = {
     },
     mara = {
         name = "Maraudon",
+        levelMin = 46, levelMax = 55,
         instanceIDs = {349},
         names = {"maraudon"},
         lastBosses = {"Princess Theradras", "Theradras"},
@@ -325,6 +348,7 @@ ns.DUNGEONS = {
     },
     alcaz = {
         name = "Alcaz Prison",
+        levelMin = 48, levelMax = 53,
         instanceIDs = {},
         names = {"alcaz prison", "alcaz island prison", "alcaz island"},
         lastBosses = {"Blazeroar"},
@@ -335,6 +359,7 @@ ns.DUNGEONS = {
     },
     st = {
         name = "The Temple of Atal'Hakkar",
+        levelMin = 50, levelMax = 60,
         instanceIDs = {109},
         names = {"the temple of atal'hakkar", "sunken temple", "atal'hakkar"},
         lastBosses = {"Shade of Eranikus", "Eranikus"},
@@ -352,6 +377,7 @@ ns.DUNGEONS = {
     },
     brd = {
         name = "Blackrock Depths",
+        levelMin = 52, levelMax = 60,
         instanceIDs = {230},
         names = {"blackrock depths"},
         lastBosses = {"Emperor Dagran Thaurissan", "Dagran Thaurissan", "Thaurissan"},
@@ -373,6 +399,7 @@ ns.DUNGEONS = {
     },
     dme = {
         name = "Dire Maul — East",
+        levelMin = 54, levelMax = 60,
         instanceIDs = {429},
         names = {"dire maul"},
         lastBosses = {"Alzzin the Wildshaper", "Alzzin"},
@@ -387,6 +414,7 @@ ns.DUNGEONS = {
     },
     dmw = {
         name = "Dire Maul — West",
+        levelMin = 56, levelMax = 60,
         instanceIDs = {429},
         names = {"dire maul"},
         lastBosses = {"Prince Tortheldrin", "Tortheldrin"},
@@ -402,6 +430,7 @@ ns.DUNGEONS = {
     },
     dmn = {
         name = "Dire Maul — North",
+        levelMin = 56, levelMax = 60,
         instanceIDs = {429},
         names = {"dire maul"},
         lastBosses = {"King Gordok", "Gordok"},
@@ -419,6 +448,7 @@ ns.DUNGEONS = {
     },
     lbrs = {
         name = "Lower Blackrock Spire",
+        levelMin = 55, levelMax = 60,
         instanceIDs = {229},
         names = {"blackrock spire", "lower blackrock spire"},
         lastBosses = {"Overlord Wyrmthalak", "Wyrmthalak"},
@@ -438,6 +468,7 @@ ns.DUNGEONS = {
     },
     ubrs = {
         name = "Upper Blackrock Spire",
+        levelMin = 59, levelMax = 60,
         instanceIDs = {229},
         names = {"blackrock spire", "upper blackrock spire"},
         lastBosses = {"General Drakkisath", "Drakkisath"},
@@ -454,6 +485,7 @@ ns.DUNGEONS = {
     },
     blackmaw = {
         name = "Blackmaw Hold",
+        levelMin = 55, levelMax = 60,
         instanceIDs = {},
         names = {"blackmaw hold", "blackmaw"},
         lastBosses = {"Varrox Bleakhoof"},
@@ -464,6 +496,7 @@ ns.DUNGEONS = {
     },
     scholo = {
         name = "Scholomance",
+        levelMin = 58, levelMax = 60,
         instanceIDs = {289, 1007},
         names = {"scholomance"},
         lastBosses = {"Darkmaster Gandling", "Gandling"},
@@ -484,6 +517,7 @@ ns.DUNGEONS = {
     },
     shapers = {
         name = "Shaper's Terrace",
+        levelMin = 58, levelMax = 60,
         instanceIDs = {},
         names = {"shaper's terrace", "shapers terrace"},
         lastBosses = {},
@@ -494,6 +528,7 @@ ns.DUNGEONS = {
     },
     stratlive = {
         name = "Stratholme — Main Gate",
+        levelMin = 58, levelMax = 60,
         instanceIDs = {329},
         names = {"stratholme"},
         lastBosses = {"Balnazzar"},
@@ -510,6 +545,7 @@ ns.DUNGEONS = {
     },
     stratdead = {
         name = "Stratholme — Service Gate",
+        levelMin = 58, levelMax = 60,
         instanceIDs = {329},
         names = {"stratholme"},
         lastBosses = {"Baron Rivendare", "Rivendare"},

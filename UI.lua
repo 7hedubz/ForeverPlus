@@ -252,7 +252,20 @@ function UI.BuildBoard()
     local close = CreateFrame("Button", nil, board, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", 2, 2)
 
-    Text(board, 16, -68, 200, "GameFontNormal"):SetText("DUNGEONS")
+    Text(board, 16, -68, 76, "GameFontNormal"):SetText("DUNGEONS")
+    local sort = CreateFrame("Button", nil, board, "UIPanelButtonTemplate")
+    sort:SetSize(132, 22)
+    sort:SetPoint("TOPLEFT", 95, -62)
+    sort:SetScript("OnClick", function() UI.ToggleDungeonSort() end)
+    sort:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:AddLine("Dungeon order", 1, 0.82, 0.2)
+        GameTooltip:AddLine("Click to toggle Alphabetical / Level Range.", 1, 1, 1)
+        GameTooltip:AddLine("Level Range: lowest level, upper level, then name.", 0.7, 0.7, 0.7)
+        GameTooltip:Show()
+    end)
+    sort:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    board.sortButton = sort
     Text(board, 240, -68, 210, "GameFontNormal"):SetText("RUN HISTORY")
     Text(board, 480, -68, 420, "GameFontNormal"):SetText("RUN DETAILS")
     board.dungeonChild, board.dungeonScroll = PanelScroll(board, "ForeverPlusDungeonScroll", 16, -94, 192, 410)
@@ -288,6 +301,19 @@ function UI.BuildBoard()
     board.syncStatus = Text(board, 158, -526, 750, "GameFontDisableSmall")
 end
 
+local function SortMode()
+    local mode = DB().dungeonSort
+    if (ns.IsSecret and ns.IsSecret(mode)) or mode ~= "level" then mode = "alpha" end
+    DB().dungeonSort = mode
+    return mode
+end
+
+function UI.ToggleDungeonSort()
+    DB().dungeonSort = SortMode() == "alpha" and "level" or "alpha"
+    if board then board.dungeonScroll:SetVerticalScroll(0) end
+    UI.RefreshBoard()
+end
+
 local function AllDungeons()
     local byKey, counts = {}, {}
     for key, d in pairs(ns.DUNGEONS) do byKey[key] = d.name end
@@ -298,8 +324,23 @@ local function AllDungeons()
     end
     for key, b in pairs(DB().best) do byKey[key] = byKey[key] or b.name or key end
     local list = {}
-    for key, name in pairs(byKey) do list[#list + 1] = {key=key, name=name, count=counts[key] or 0} end
-    table.sort(list, function(a, b) return a.name < b.name end)
+    for key, name in pairs(byKey) do
+        local dungeon = ns.DUNGEONS[key]
+        list[#list + 1] = {key=key, name=name, count=counts[key] or 0,
+            levelMin=dungeon and dungeon.levelMin, levelMax=dungeon and dungeon.levelMax}
+    end
+    local mode = SortMode()
+    table.sort(list, function(a, b)
+        if mode == "level" then
+            local lowA, lowB = a.levelMin or math.huge, b.levelMin or math.huge
+            if lowA ~= lowB then return lowA < lowB end
+            local highA, highB = a.levelMax or math.huge, b.levelMax or math.huge
+            if highA ~= highB then return highA < highB end
+        end
+        local nameA, nameB = SafeText(a.name):lower(), SafeText(b.name):lower()
+        if nameA ~= nameB then return nameA < nameB end
+        return a.key < b.key
+    end)
     table.insert(list, 1, {key="*", name="All dungeons", count=#history})
     return list
 end
@@ -321,6 +362,7 @@ end
 function UI.RefreshBoard()
     if not board then return end
     local dungeons = AllDungeons()
+    board.sortButton:SetText(SortMode() == "level" and "Level Range" or "Alphabetical")
     board.selectedDungeon = board.selectedDungeon or "*"
     local dungeonExists = false
     for i, d in ipairs(dungeons) do
@@ -342,7 +384,9 @@ function UI.RefreshBoard()
         end
         row.key, row.fullName = d.key, d.name
         row.title:SetText(SafeText(d.name))
-        row.count:SetText(string.format("%d recorded run%s", d.count, d.count == 1 and "" or "s"))
+        local range = d.levelMin and string.format("Lv %d–%d · ", d.levelMin, d.levelMax)
+            or (d.key ~= "*" and "Lv ? · " or "")
+        row.count:SetText(range .. string.format("%d run%s", d.count, d.count == 1 and "" or "s"))
         if d.key == board.selectedDungeon then row.selected:Show() else row.selected:Hide() end
         row:Show()
     end

@@ -1,14 +1,16 @@
 # ForeverPlus
 
-Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.1.0**, Interface `16001` (Camelot).
+Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.1.1**, Interface `16001` (Camelot).
 
 ## Install / upgrade
 
-Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. **Fully quit and relaunch when upgrading to 1.1.0**, because it adds new Lua files and changes the TOC load list. Existing personal bests and settings remain separate from the new run history.
+Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading **1.1.0 → 1.1.1** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
 
 ## Dungeon journal
 
 Open with `/fplus`, or right-click the minimap icon and choose **Dungeon history**.
+
+Use the button above the dungeon list to toggle **Alphabetical / Level Range**. Your choice is saved. Level Range sorts by the lowest recommended level, then the upper level, then dungeon name. Recommended bands are shown next to run counts and come from the installed ForeverGuide catalog; they are not admission requirements. Unknown bands sort last in Level Range mode. **All dungeons** stays pinned and sorting preserves the selected dungeon/run.
 
 1. Select a dungeon in the left column (or **All dungeons**).
 2. Select an individual run in the middle column.

@@ -1,10 +1,14 @@
-ForeverPlus 1.1.0 — WoW Forever dungeon timer and run journal
+ForeverPlus 1.1.1 — WoW Forever dungeon timer and run journal
 ============================================================
 Interface 16001 / Camelot. Install in _forever_/Interface/AddOns/ForeverPlus.
-FULLY QUIT AND RELAUNCH for this upgrade: new Lua files and TOC entries added.
+From 1.1.0: /reload. New install or upgrade from before 1.1.0: fully relaunch.
 
 DUNGEON JOURNAL
 /fplus opens a three-column journal: choose dungeon -> choose run -> stats.
+The button above the dungeon list toggles Alphabetical / Level Range and saves
+your choice. Recommended level bands appear beside run counts. Level order is
+minimum, maximum, then name; unknown bands sort last, All dungeons stays first.
+Bands follow the installed ForeverGuide catalog, not admission requirements.
 Each new run records date/time, elapsed duration, completion status, roster,
 observed damage/healing, and deaths. Abandoned/reset attempts have their own
 status. Demo runs never save or sync. History retains up to 500 run records.

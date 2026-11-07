@@ -3,7 +3,7 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.1.0"
+ns.ver = "1.1.1"
 
 local LIMIT = ns.LIMIT
 local Secret = ns.IsSecret

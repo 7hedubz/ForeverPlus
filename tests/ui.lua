@@ -81,3 +81,37 @@ syncStatus='Sync idle.'
 ns.UI.Tick()
 assert(ForeverPlusBoard.syncStatus.text=='Sync idle.','sync status does not refresh when timer is hidden')
 print('PASS journal sync status updates while timer is hidden')
+ns.UI.SelectDungeon('rfc')
+assert(ForeverPlusBoard.sortButton,'dungeon sort toggle is missing')
+assert(ForeverPlusBoard.sortButton.text=='Alphabetical')
+assert(ForeverPlusBoard.dungeonLines[1].key=='*','All dungeons must stay pinned')
+local count=0
+for key,d in pairs(ns.DUNGEONS) do
+ assert(type(d.levelMin)=='number' and type(d.levelMax)=='number' and d.levelMin<=d.levelMax,'missing or invalid level range: '..key)
+ count=count+1
+end
+assert(count==35,'catalog level coverage changed unexpectedly')
+assert(ns.DUNGEONS.rfc.levelMin==13 and ns.DUNGEONS.rfc.levelMax==18)
+assert(ns.DUNGEONS.ubrs.levelMin==59 and ns.DUNGEONS.ubrs.levelMax==60)
+ForeverPlusBoard.sortButton.scripts.OnClick()
+assert(db.dungeonSort=='level' and ForeverPlusBoard.sortButton.text=='Level Range')
+assert(ForeverPlusBoard.dungeonLines[2].key=='thanes','minimum+maximum tie must sort alphabetically')
+assert(ForeverPlusBoard.dungeonLines[3].key=='rfc')
+assert(ForeverPlusBoard.dungeonLines[4].key=='lordaeron')
+assert(ForeverPlusBoard.dungeonLines[5].key=='wc' and ForeverPlusBoard.dungeonLines[6].key=='dm','same minimum must sort by maximum')
+assert(ForeverPlusBoard.dungeonLines[3].count.text:find('13–18',1,true),'range not visible')
+assert(ForeverPlusBoard.selectedDungeon=='rfc' and ForeverPlusBoard.selectedRun=='r1','sort lost run selection')
+records[#records+1]={id='unknown',dungeonKey='name:annex',dungeonName='Aardvark Annex',sec=5,chest=3,status='completed',endUnix=2700,recordedBy='Tester-Realm',coverage='unavailable',players={}}
+ns.UI.RefreshBoard()
+local last
+for _,row in ipairs(ForeverPlusBoard.dungeonLines) do if row.shown then last=row.key end end
+assert(last=='name:annex','unknown level should sort last')
+assert(loadfile('UI.lua'))('ForeverPlus',ns);ns.UI.Init();ns.UI.RefreshBoard()
+assert(ForeverPlusBoard.sortButton.text=='Level Range','sort preference not restored on UI reload')
+ForeverPlusBoard.sortButton.scripts.OnClick()
+assert(db.dungeonSort=='alpha' and ForeverPlusBoard.sortButton.text=='Alphabetical')
+assert(ForeverPlusBoard.dungeonLines[2].key=='name:annex','alphabetical mode not restored')
+assert(loadfile('UI.lua'))('ForeverPlus',ns);ns.UI.Init();ns.UI.RefreshBoard()
+assert(ForeverPlusBoard.sortButton.text=='Alphabetical')
+db.dungeonSort='bad';ns.UI.RefreshBoard();assert(db.dungeonSort=='alpha')
+print('PASS alphabetical/level toggle, all catalog ranges, ties, selection, unknowns and saved preference')
