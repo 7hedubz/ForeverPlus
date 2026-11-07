@@ -402,6 +402,13 @@ function UI.Tick()
         frame.clock:SetText("60:00")
         frame.clock:SetTextColor(0.7, 0.7, 0.7)
         frame.chest:SetText("")
+        frame.chest:SetTextColor(1, 1, 1)
+        frame.title:SetText("FOREVER +1")
+        frame.best:SetText("Best: —")
+        frame.deaths:SetText("Deaths: 0")
+        frame.obj:SetText("Bosses 0/0     Forces 0%")
+        frame.fill:SetWidth(1)
+        frame.fill:SetVertexColor(0.7, 0.7, 0.7)
         return
     end
 
@@ -441,9 +448,14 @@ function UI.Tick()
     if frame.obj then
         local down, total = ns.CountBossesDown(run)
         local fp = ns.ForcesPercent(run)
-        local bcol = (total == 0 or down >= total) and "|cff00ff96" or "|cffffffff"
+        local manual = total == 0 or (run.dungeon and (run.dungeon.manual or run.dungeon.unknown))
+        local bcol = (not manual and down >= total) and "|cff00ff96" or "|cffffffff"
         local fcol = (fp >= 100) and "|cff00ff96" or "|cffffffff"
-        frame.obj:SetText(string.format("%sBosses %d/%d|r     %sForces %d%%|r", bcol, down, total, fcol, fp))
+        if manual then
+            frame.obj:SetText(string.format("|cffffd200Bosses: manual|r     %sForces %d%%|r", fcol, fp))
+        else
+            frame.obj:SetText(string.format("%sBosses %d/%d|r     %sForces %d%%|r", bcol, down, total, fcol, fp))
+        end
     end
 
     local frac = math.min(1, sec / ns.LIMIT)

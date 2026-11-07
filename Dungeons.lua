@@ -531,8 +531,26 @@ ns.NAME_TO_KEYS = {}
 ns.NPC_TO_KEY = {}
 ns.BOSSNAME_TO_KEY = {}
 
+function ns.IsSecret(v)
+    if not issecretvalue then return false end
+    local ok, hidden = pcall(issecretvalue, v)
+    return not ok or hidden
+end
+function ns.SafeRead(fn, ...)
+    if type(fn) ~= "function" then return nil end
+    local ok, value = pcall(fn, ...)
+    if not ok or ns.IsSecret(value) then return nil end
+    return value
+end
+function ns.SafeInstance()
+    if not GetInstanceInfo then return nil end
+    local ok, name, kind, _, _, _, _, _, id = pcall(GetInstanceInfo)
+    if not ok or ns.IsSecret(name) or ns.IsSecret(kind) or ns.IsSecret(id) then return nil end
+    if type(kind) ~= "string" or (name ~= nil and type(name) ~= "string") or (id ~= nil and type(id) ~= "number") then return nil end
+    return {name=name, instanceType=kind, instanceID=id}
+end
 local function Fold(s)
-    if not s then return "" end
+    if ns.IsSecret(s) or type(s) ~= "string" then return "" end
     s = s:lower()
     s = s:gsub("['’`]", "")
     s = s:gsub("[^%w]+", " ")
@@ -566,6 +584,13 @@ for key, d in pairs(ns.DUNGEONS) do
     end
 end
 
+function ns.AreSiblingDungeons(a, b)
+    if not a or not b then return false end
+    for _,id in ipairs(a.instanceIDs or {}) do
+        for _,other in ipairs(b.instanceIDs or {}) do if id == other then return true end end
+    end
+    return false
+end
 function ns.DungeonByKey(key)
     return ns.DUNGEONS[key]
 end
@@ -603,13 +628,11 @@ end
 
 local function ZoneBlob()
     local a = ""
-    if GetInstanceInfo then
-        local n = GetInstanceInfo()
-        if type(n) == "string" then a = n end
-    end
-    local b = (GetRealZoneText and GetRealZoneText()) or ""
-    local c = (GetSubZoneText and GetSubZoneText()) or ""
-    local d = (GetMinimapZoneText and GetMinimapZoneText()) or ""
+    local inst = ns.SafeInstance()
+    if inst and type(inst.name) == "string" then a = inst.name end
+    local b = ns.SafeRead(GetRealZoneText) or ""
+    local c = ns.SafeRead(GetSubZoneText) or ""
+    local d = ns.SafeRead(GetMinimapZoneText) or ""
     if type(b) ~= "string" then b = "" end
     if type(c) ~= "string" then c = "" end
     if type(d) ~= "string" then d = "" end
@@ -617,7 +640,9 @@ local function ZoneBlob()
 end
 
 function ns.ResolveDungeon()
-    local name, instanceType, _, _, _, _, _, instanceID = GetInstanceInfo()
+    local inst = ns.SafeInstance()
+    if not inst then return nil end
+    local name, instanceType, instanceID = inst.name, inst.instanceType, inst.instanceID
     if instanceType ~= "party" then
         return nil
     end
@@ -630,14 +655,7 @@ function ns.ResolveDungeon()
     if not keys then
         local folded = Fold(name)
         keys = ns.NAME_TO_KEYS[folded]
-        if not keys then
-            for n, klist in pairs(ns.NAME_TO_KEYS) do
-                if folded:find(n, 1, true) or n:find(folded, 1, true) then
-                    keys = klist
-                    break
-                end
-            end
-        end
+
     end
 
     if not keys or #keys == 0 then
@@ -659,7 +677,7 @@ function ns.ResolveDungeon()
 
     if #keys == 1 then
         local d = ns.DUNGEONS[keys[1]]
-        return d
+        return d, 2
     end
 
     -- Multi-wing maps: pick by subzone, else return a parent stand-in (first key)
@@ -668,60 +686,48 @@ function ns.ResolveDungeon()
     local function has(s) return blob:find(s, 1, true) end
 
     if instanceID == 189 or (Fold(name):find("scarlet")) then
-        if has("library") or has("gallery") or has("doan") then return ns.DUNGEONS.smlib end
-        if has("armory") or has("hunter") or has("herod") then return ns.DUNGEONS.smarm end
-        if has("cathedral") or has("chapel") or has("whitemane") or has("mograine") then return ns.DUNGEONS.smcath end
-        if has("grave") or has("thalnos") or has("vishas") then return ns.DUNGEONS.smgy end
-        return ns.DUNGEONS.smgy
+        if has("library") or has("gallery") or has("doan") then return ns.DUNGEONS.smlib, 2 end
+        if has("armory") or has("hunter") or has("herod") then return ns.DUNGEONS.smarm, 2 end
+        if has("cathedral") or has("chapel") or has("whitemane") or has("mograine") then return ns.DUNGEONS.smcath, 2 end
+        if has("grave") or has("thalnos") or has("vishas") then return ns.DUNGEONS.smgy, 2 end
+        return ns.DUNGEONS.smgy, 0
     end
 
     if instanceID == 429 or Fold(name):find("dire maul") then
-        if has("gordok") or has("north") or has("commons") then return ns.DUNGEONS.dmn end
-        if has("capital") or has("west") or has("conservatory") then return ns.DUNGEONS.dmw end
-        if has("warpwood") or has("east") then return ns.DUNGEONS.dme end
-        return ns.DUNGEONS.dme
+        if has("gordok") or has("north") or has("commons") then return ns.DUNGEONS.dmn, 2 end
+        if has("capital") or has("west") or has("conservatory") then return ns.DUNGEONS.dmw, 2 end
+        if has("warpwood") or has("east") then return ns.DUNGEONS.dme, 2 end
+        return ns.DUNGEONS.dme, 0
     end
 
     if instanceID == 229 or Fold(name):find("blackrock spire") then
         if has("upper") or has("hall of blackhand") or has("spire throne") or has("the rookery") then
-            return ns.DUNGEONS.ubrs
+            return ns.DUNGEONS.ubrs, 2
         end
         if has("lower") or has("hordemar") or has("skitterweb") then
-            return ns.DUNGEONS.lbrs
+            return ns.DUNGEONS.lbrs, 2
         end
-        return ns.DUNGEONS.lbrs
+        return ns.DUNGEONS.lbrs, 0
     end
 
     if instanceID == 329 or Fold(name):find("stratholme") then
         if has("service") or has("slaughter") or has("gauntlet") or has("undead") then
-            return ns.DUNGEONS.stratdead
+            return ns.DUNGEONS.stratdead, 2
         end
-        return ns.DUNGEONS.stratlive
+        return ns.DUNGEONS.stratlive, 0
     end
 
     return ns.DUNGEONS[keys[1]]
 end
 
 local function NameHits(folded, n)
-    if n == "" or folded == "" then return false end
-    if folded == n then return true end
-    -- Full names: kill title may include extra words ("Shade of Eranikus").
-    if n:find(" ", 1, true) then
-        return folded:find(n, 1, true) ~= nil
-    end
-    -- Short aliases must be a whole word ("Arugal" != "Arugals Voidwalker").
-    if folded:match("^" .. n .. "$") then return true end
-    if folded:match("^" .. n .. " ") then return true end
-    if folded:match(" " .. n .. "$") then return true end
-    if folded:match(" " .. n .. " ") then return true end
-    return false
+    return n ~= "" and folded ~= "" and folded == n
 end
 ns.NameHits = NameHits
 
 function ns.KeyFromKill(npcId, bossName)
-    if npcId and ns.NPC_TO_KEY[npcId] then
-        return ns.NPC_TO_KEY[npcId]
-    end
+    if ns.IsSecret(npcId) then return nil end
+    if npcId ~= nil then return ns.NPC_TO_KEY[npcId] end
     local folded = Fold(bossName)
     if folded == "" then return nil end
     if ns.BOSSNAME_TO_KEY[folded] then
@@ -736,11 +742,16 @@ function ns.KeyFromKill(npcId, bossName)
 end
 
 function ns.IsLastBossOf(dungeon, npcId, bossName)
-    if not dungeon then return false end
+    if not dungeon or ns.IsSecret(npcId) then return false end
     if npcId and dungeon.lastNpc then
         for i = 1, #dungeon.lastNpc do
             if dungeon.lastNpc[i] == npcId then return true end
         end
+    end
+    if npcId ~= nil then
+        local via = ns.KeyFromKill(npcId)
+        if via and via ~= dungeon.key and ns.AreSiblingDungeons(dungeon, ns.DUNGEONS[via]) then return false, via end
+        return false
     end
     local folded = Fold(bossName)
     if folded == "" then return false end
@@ -774,7 +785,7 @@ function ns.IsLastBossOf(dungeon, npcId, bossName)
 end
 
 function ns.MatchRequiredBoss(dungeon, npcId, bossName)
-    if not dungeon then return nil end
+    if not dungeon or ns.IsSecret(npcId) then return nil end
     local list = dungeon.bosses or {}
     local folded = Fold(bossName)
     for i = 1, #list do
@@ -782,8 +793,17 @@ function ns.MatchRequiredBoss(dungeon, npcId, bossName)
         if npcId and b.id and npcId == b.id then
             return i, b
         end
-        if folded ~= "" and b.n and NameHits(folded, Fold(b.n)) then
-            return i, b
+        if folded ~= "" and (npcId == nil or b.id == nil) then
+            if b.n and NameHits(folded, Fold(b.n)) then return i, b end
+            -- Declared final-boss aliases belong only to the canonical final boss.
+            if b.n and Fold(b.n) == Fold((dungeon.lastBosses or {})[1]) then
+                for _, alias in ipairs(dungeon.lastBosses or {}) do
+                    if NameHits(folded, Fold(alias)) then return i, b end
+                end
+            end
+            for _, alias in ipairs(b.aliases or {}) do
+                if NameHits(folded, Fold(alias)) then return i, b end
+            end
         end
     end
     return nil
@@ -801,8 +821,8 @@ function ns.MarkBoss(run, b, npcId, name)
     run.bossDown = run.bossDown or {}
     if b and b.id then run.bossDown["id:" .. b.id] = true end
     if b and b.n then run.bossDown["n:" .. Fold(b.n)] = true end
-    if npcId then run.bossDown["id:" .. npcId] = true end
-    if name and Fold(name) ~= "" then run.bossDown["n:" .. Fold(name)] = true end
+    -- Store only the matched roster identity. An observed name can disagree
+    -- with an authoritative NPC ID and must not credit a second roster boss.
 end
 
 function ns.CountBossesDown(run)
@@ -819,7 +839,7 @@ end
 
 function ns.AllBossesDown(run)
     local down, total = ns.CountBossesDown(run)
-    return down >= total
+    return total > 0 and run.dungeon and not run.dungeon.manual and not run.dungeon.unknown and down >= total
 end
 
 function ns.ForcesPercent(run)

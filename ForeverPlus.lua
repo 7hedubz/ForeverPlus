@@ -3,11 +3,24 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.0.0"
+ns.ver = "1.0.1"
 
 local LIMIT = ns.LIMIT
-local Secret = function(v)
-    return issecretvalue and issecretvalue(v)
+local Secret = ns.IsSecret
+local Read = ns.SafeRead
+local function Number(v)
+    return not Secret(v) and type(v) == "number" and v == v and v > -math.huge and v < math.huge
+end
+local function Count(v)
+    if not Number(v) or v < 0 then return 0 end
+    return math.floor(v)
+end
+local function BoolMap(v)
+    if type(v) ~= "table" or Secret(v) then return {} end
+    for k, value in pairs(v) do
+        if Secret(k) or type(k) ~= "string" or Secret(value) or value ~= true then v[k] = nil end
+    end
+    return v
 end
 
 local function Print(msg)
@@ -19,20 +32,76 @@ end
 ns.Print = Print
 
 local function DB()
-    ForeverPlusDB = ForeverPlusDB or {}
+    if Secret(ForeverPlusDB) or type(ForeverPlusDB) ~= "table" then ForeverPlusDB = {} end
     local d = ForeverPlusDB
-    d.best = d.best or {}
-    d.peers = d.peers or {}
-    d.pos = d.pos or {}
-    d.minimap = d.minimap or { angle = 198 }
-    if d.locked == nil then d.locked = false end
-    if d.showMinimap == nil then d.showMinimap = true end
+    for _,key in ipairs({"best", "peers", "pos", "minimap"}) do
+        if Secret(d[key]) or type(d[key]) ~= "table" then d[key] = {} end
+    end
+    local function Records(records)
+        for key,b in pairs(records) do
+            if Secret(key) or type(key) ~= "string" or Secret(b) or type(b) ~= "table" or not Number(b.sec) or b.sec <= 0 then
+                records[key] = nil
+            else
+                b.chest = Number(b.chest) and math.max(0, math.min(3, math.floor(b.chest))) or 0
+                for _,field in ipairs({"name", "player"}) do
+                    if Secret(b[field]) or type(b[field]) ~= "string" then b[field] = nil end
+                end
+            end
+        end
+    end
+    Records(d.best)
+    for who,records in pairs(d.peers) do
+        if Secret(who) or type(who) ~= "string" or Secret(records) or type(records) ~= "table" then
+            d.peers[who] = nil
+        else Records(records) end
+    end
+    local points = {CENTER=true,TOP=true,BOTTOM=true,LEFT=true,RIGHT=true,TOPLEFT=true,TOPRIGHT=true,BOTTOMLEFT=true,BOTTOMRIGHT=true}
+    if Secret(d.pos.p) or type(d.pos.p) ~= "string" or not points[d.pos.p] then d.pos = {} end
+    if d.pos.p then
+        if Secret(d.pos.rp) or type(d.pos.rp) ~= "string" or not points[d.pos.rp] then d.pos.rp = d.pos.p end
+        if not Number(d.pos.x) then d.pos.x = 0 end
+        if not Number(d.pos.y) then d.pos.y = 0 end
+    end
+    if not Number(d.minimap.angle) then d.minimap.angle = 198 end
+    local s = d.currentRun
+    if s ~= nil then
+        if Secret(s) or type(s) ~= "table" or type(s.key) ~= "string" or Secret(s.key) or not Number(s.startUnix) then
+            d.currentRun = nil
+        else
+            if not Number(s.instanceID) then s.instanceID = nil end
+            s.kills, s.deaths = Count(s.kills), Count(s.deaths)
+            s.bossDown, s.killSeen, s.killCredit = BoolMap(s.bossDown), BoolMap(s.killSeen), BoolMap(s.killCredit)
+            s.confidence = Number(s.confidence) and math.max(0, math.min(3, s.confidence)) or 1
+            s.complete = not Secret(s.complete) and s.complete == true
+        end
+    end
+    if Secret(d.locked) or type(d.locked) ~= "boolean" then d.locked = false end
+    if Secret(d.showMinimap) or type(d.showMinimap) ~= "boolean" then d.showMinimap = true end
     if d.best then d.best.demo = nil end
     return d
 end
 ns.DB = DB
 
 local run -- current timed run
+local function Persist()
+    if not run or run.practice then return end
+    DB().currentRun = {
+        key=run.key, name=run.name, instanceID=run.instanceID,
+        startUnix=run.startUnix, deaths=run.deaths, kills=run.kills,
+        bossDown=run.bossDown, killSeen=run.killSeen, killCredit=run.killCredit,
+        confidence=run.confidence, complete=run.complete, sec=run.sec, chest=run.chest,
+    }
+end
+local function SameSession(a, b, inst)
+    if a.instanceID and inst.instanceID and a.instanceID ~= inst.instanceID then return false end
+    if a.key == b.key then return true end
+    local old = ns.DungeonByKey(a.key)
+    if not old then return false end
+    for _,id in ipairs(old.instanceIDs or {}) do
+        for _,other in ipairs(b.instanceIDs or {}) do if id == other then return true end end
+    end
+    return false
+end
 
 function ns.GetRun()
     return run
@@ -44,6 +113,7 @@ end
 
 local function Elapsed(r)
     if not r then return 0 end
+    if r.complete then return r.sec or 0 end
     if r.paused then
         return r.pausedElapsed or 0
     end
@@ -52,8 +122,10 @@ end
 ns.Elapsed = Elapsed
 
 local function PlayerFull()
-    local name = UnitName("player") or "Player"
-    local realm = GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName() or ""
+    local name = Read(UnitName, "player")
+    if type(name) ~= "string" then name = "Player" end
+    local realm = Read(GetNormalizedRealmName) or Read(GetRealmName)
+    if type(realm) ~= "string" then realm = "" end
     realm = realm:gsub("%s+", "")
     if realm ~= "" then
         return name .. "-" .. realm
@@ -88,19 +160,7 @@ function ns.SaveBest(key, sec, chest, dungeonName)
     return isNew, d.best[key]
 end
 
-local function SafeInstance()
-    local ok, name, instanceType, difficultyID, difficultyName, maxPlayers, dynamicDifficulty, isDynamic, instanceID = pcall(GetInstanceInfo)
-    if not ok then
-        return nil, "none"
-    end
-    if Secret(name) then name = nil end
-    if Secret(instanceType) then instanceType = "none" end
-    return {
-        name = name,
-        instanceType = instanceType,
-        instanceID = instanceID,
-    }
-end
+local SafeInstance = ns.SafeInstance
 
 function ns.StartRun(dungeon, reason)
     if not dungeon then return end
@@ -114,7 +174,8 @@ function ns.StartRun(dungeon, reason)
         key = dungeon.key,
         name = dungeon.name,
         dungeon = dungeon,
-        instanceID = select(8, GetInstanceInfo()),
+        instanceID = (SafeInstance() or {}).instanceID,
+        confidence = select(2, ns.ResolveDungeon()) or 1,
         startUnix = Now(),
         startGetTime = GetTime(),
         deaths = 0,
@@ -124,20 +185,9 @@ function ns.StartRun(dungeon, reason)
         forces = 0,
         bossDown = {},
         killSeen = {},
+        killCredit = {},
     }
-    if not run.practice then
-        DB().currentRun = {
-            key = run.key,
-            name = run.name,
-            startUnix = run.startUnix,
-            instanceID = run.instanceID,
-            deaths = 0,
-            kills = 0,
-            bossDown = {},
-        }
-    else
-        DB().currentRun = nil
-    end
+    Persist()
     if ns.UI then ns.UI.Show() end
     if not run.practice then
         Print(string.format("Key started: |cffffd100%s|r — 1:00:00. Kill every standard boss and 50 mobs (2%% each) to time it.", run.name))
@@ -149,6 +199,15 @@ function ns.StartRun(dungeon, reason)
 end
 
 function ns.AbandonRun(reason)
+    if run and run.practice then
+        run = nil
+        if ns.UI then ns.UI.HideNow() end
+        return -- practice never owns the saved real-session marker
+    end
+    if run and run.complete and not run.practice then
+        if ns.UI then ns.UI.HideSoon() end
+        return
+    end
     if not run or not run.active then
         run = nil
         DB().currentRun = nil
@@ -179,7 +238,7 @@ function ns.CompleteRun(bossName, source)
     run.sec = sec
     run.chest = chest
     run.boss = bossName
-    DB().currentRun = nil
+    Persist()
 
     local elapsedStr = ns.FormatTime(sec)
     local clock, over = ns.FormatClock(sec, LIMIT)
@@ -227,23 +286,26 @@ function ns.CompleteRun(bossName, source)
 end
 
 local function ResumeIfNeeded()
+    if run then return end
     local inst = SafeInstance()
     if not inst or inst.instanceType ~= "party" then return end
     local saved = DB().currentRun
     if not saved or not saved.startUnix then return end
-    local dungeon = ns.ResolveDungeon()
+    local dungeon, confidence = ns.ResolveDungeon()
     if not dungeon then return end
-    if saved.key ~= dungeon.key and saved.instanceID ~= inst.instanceID then
-        return
+    if not SameSession(saved, dungeon, inst) then DB().currentRun = nil; return end
+    if (saved.confidence or 1) >= (confidence or 1) then
+        dungeon = ns.DungeonByKey(saved.key) or dungeon
     end
     local elapsedUnix = Now() - saved.startUnix
-    if elapsedUnix < 0 or elapsedUnix > 12 * 3600 then
+    if not saved.complete and (elapsedUnix < 0 or elapsedUnix > 12 * 3600) then
         DB().currentRun = nil
         return
     end
     run = {
-        active = true,
-        complete = false,
+        active = not saved.complete,
+        complete = saved.complete or false,
+        confidence = saved.confidence or confidence or 1,
         key = dungeon.key,
         name = dungeon.name,
         dungeon = dungeon,
@@ -252,35 +314,41 @@ local function ResumeIfNeeded()
         startGetTime = GetTime() - elapsedUnix,
         deaths = saved.deaths or 0,
         reason = "resume",
+        sec = saved.complete and (Number(saved.sec) and math.max(0, saved.sec) or math.max(0, elapsedUnix)) or nil,
+        chest = Number(saved.chest) and saved.chest or 0,
         kills = saved.kills or 0,
         bossDown = saved.bossDown or {},
-        killSeen = {},
+        killSeen = saved.killSeen or {},
+        killCredit = saved.killCredit or {},
     }
+    Persist()
     if ns.UI then ns.UI.Show() end
     Print("Resumed key for " .. dungeon.name .. " at " .. ns.FormatTime(elapsedUnix) .. ".")
 end
 
 function ns.CheckZone(reason)
+    ResumeIfNeeded()
     local inst = SafeInstance()
     if not inst then return end
     if inst.instanceType == "party" then
-        local dungeon = ns.ResolveDungeon()
+        local dungeon, confidence = ns.ResolveDungeon()
         if dungeon then
-            if run and run.practice then
-                run = nil
-            end
-            if run and run.active and not run.complete then
-                -- Upgrade wing key if we learned it.
-                if run.key ~= dungeon.key then
-                    run.key = dungeon.key
-                    run.name = dungeon.name
-                    run.dungeon = dungeon
+            if run and run.practice then run = nil; ResumeIfNeeded() end
+            if run and SameSession(run, dungeon, inst) then
+                if not run.complete and (confidence or 1) > (run.confidence or 1) then
+                    run.key, run.name, run.dungeon = dungeon.key, dungeon.name, dungeon
+                    run.confidence = confidence
+                    Persist()
                 end
                 return
             end
+            run = nil
+            DB().currentRun = nil
             ns.StartRun(dungeon, reason)
         end
     else
+        -- A real departure ends its session even if a practice overlay is up.
+        DB().currentRun = nil
         if run and run.practice then
             return
         end
@@ -290,12 +358,13 @@ function ns.CheckZone(reason)
             run.active = false
             if ns.UI then ns.UI.HideSoon() end
             if ns.Comm then ns.Comm.QueueShare() end
+            run = nil
         end
     end
 end
 
 local function NpcIdFromGUID(guid)
-    if type(guid) ~= "string" or Secret(guid) then return nil end
+    if Secret(guid) or type(guid) ~= "string" then return nil end
     if not strsplit then return nil end
     local unitType, _, _, _, _, npcId = strsplit("-", guid)
     if unitType == "Creature" or unitType == "Vehicle" then
@@ -311,21 +380,13 @@ function ns.OnCreatureDead(guid, npcId, name, source)
     if run.practice then
         return
     end
-    if Secret(name) then name = nil end
+    if Secret(name) or type(name) ~= "string" then name = nil end
     if Secret(guid) then guid = nil end
+    if Secret(npcId) then npcId = nil end
 
     run.killSeen = run.killSeen or {}
-    local countForces = source ~= "ENCOUNTER_END" and source ~= "BOSS_KILL"
-    local isNewKill = countForces
-    if guid then
-        if run.killSeen[guid] then
-            isNewKill = false
-        else
-            run.killSeen[guid] = true
-        end
-    elseif not countForces then
-        isNewKill = false
-    end
+    local isNewKill = NpcIdFromGUID(guid) and run.killCredit and run.killCredit[guid] and not run.killSeen[guid]
+    if isNewKill then run.killSeen[guid] = true end
     if isNewKill then
         run.kills = (run.kills or 0) + 1
         run.forces = ns.ForcesPercent(run)
@@ -341,6 +402,7 @@ function ns.OnCreatureDead(guid, npcId, name, source)
         run.name = ns.DUNGEONS[viaLast].name
         run.dungeon = ns.DUNGEONS[viaLast]
         dungeon = run.dungeon
+        run.confidence = 3
     else
         local via = ns.KeyFromKill(npcId, name)
         if via and ns.DUNGEONS[via] and via ~= run.key then
@@ -356,11 +418,13 @@ function ns.OnCreatureDead(guid, npcId, name, source)
                 run.name = ns.DUNGEONS[via].name
                 run.dungeon = ns.DUNGEONS[via]
                 dungeon = run.dungeon
+                run.confidence = 3
             end
         end
     end
 
     local idx, boss = ns.MatchRequiredBoss(dungeon, npcId, name)
+    if boss then run.confidence = 3 end
     if boss and not ns.IsBossMarked(run, boss) then
         ns.MarkBoss(run, boss, npcId, name)
         if DB().currentRun then
@@ -370,6 +434,7 @@ function ns.OnCreatureDead(guid, npcId, name, source)
         Print(string.format("%s down. Bosses %d/%d. Forces %d%%.", boss.n or name or "Boss", down, total, ns.ForcesPercent(run)))
     end
 
+    Persist()
     if ns.ObjectivesMet(run) then
         ns.CompleteRun(name or "objectives", source)
     end
@@ -382,25 +447,24 @@ local function ScanBossUnits()
         units[#units + 1] = "party" .. i .. "target"
     end
     if C_NamePlate and C_NamePlate.GetNamePlates then
-        local plates = C_NamePlate.GetNamePlates()
-        if plates then
+        local plates = Read(C_NamePlate.GetNamePlates)
+        if type(plates) == "table" then
             for i = 1, #plates do
-                local tok = plates[i].namePlateUnitToken
-                if tok then units[#units + 1] = tok end
+                local plate = plates[i]
+                local tok = not Secret(plate) and type(plate) == "table" and plate.namePlateUnitToken
+                if not Secret(tok) and type(tok) == "string" then units[#units + 1] = tok end
             end
         end
     end
     for i = 1, #units do
         local u = units[i]
-        if UnitExists(u) then
-            local dead = UnitIsDead(u) or UnitIsDeadOrGhost(u)
+        if Read(UnitExists, u) == true then
+            local dead = Read(UnitIsDead, u) == true or Read(UnitIsDeadOrGhost, u) == true
             if dead then
-                local n = UnitName(u)
-                local guid = UnitGUID(u)
+                local n = Read(UnitName, u)
+                local guid = Read(UnitGUID, u)
                 local npcId = NpcIdFromGUID(guid)
-                if UnitIsPlayer and UnitIsPlayer(u) then
-                    -- skip
-                else
+                if Read(UnitIsPlayer, u) == false and Read(UnitCanAttack, "player", u) == true then
                     ns.OnCreatureDead(guid, npcId, n, u)
                 end
                 if run and run.complete then return end
@@ -457,7 +521,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 
     if event == "ENCOUNTER_END" then
         local encounterID, encounterName, difficultyID, groupSize, success = ...
-        if success == 1 or success == true then
+        if not Secret(success) and (success == 1 or success == true) then
             ns.OnCreatureDead(nil, nil, encounterName, "ENCOUNTER_END")
         end
         return
@@ -480,8 +544,17 @@ f:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "COMBAT_LOG_EVENT_UNFILTERED" then
-        local ok, timestamp, subevent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName = pcall(CombatLogGetCurrentEventInfo)
-        if not ok or Secret(subevent) then return end
+        local ok, timestamp, subevent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags = pcall(CombatLogGetCurrentEventInfo)
+        if not ok or Secret(subevent) or Secret(sourceFlags) or Secret(destFlags) then return end
+        if run and run.active and not run.practice and NpcIdFromGUID(destGUID) and type(sourceFlags) == "number" and type(destFlags) == "number" and bit and bit.band then
+            local group = bit.band(sourceFlags, 7) ~= 0
+            local hostileNPC = bit.band(destFlags, 64) ~= 0 and bit.band(destFlags, 2048) ~= 0
+            if group and hostileNPC and (subevent == "PARTY_KILL" or subevent == "SWING_DAMAGE" or subevent == "RANGE_DAMAGE" or subevent == "SPELL_DAMAGE" or subevent == "SPELL_PERIODIC_DAMAGE" or subevent == "DAMAGE_SHIELD" or subevent == "DAMAGE_SPLIT") then
+                run.killCredit = run.killCredit or {}
+                run.killCredit[destGUID] = true
+                Persist()
+            end
+        end
         if subevent == "UNIT_DIED" or subevent == "PARTY_KILL" then
             ns.OnCreatureDead(destGUID, NpcIdFromGUID(destGUID), destName, subevent)
         end
@@ -500,7 +573,6 @@ end)
 function ns.ToggleDemo()
     if run and run.practice then
         run = nil
-        DB().currentRun = nil
         if ns.UI then
             ns.UI.HideNow()
         end
@@ -543,7 +615,11 @@ SlashCmdList.FOREVERPLUS = function(msg)
         return
     end
     if msg == "reset" then
-        if run and run.active then
+        if run and not run.practice and run.complete then
+            local dungeon = run.dungeon
+            run = nil; DB().currentRun = nil
+            ns.StartRun(dungeon, "reset")
+        elseif run and run.active then
             run.startGetTime = GetTime()
             run.startUnix = Now()
             run.deaths = 0
@@ -551,6 +627,8 @@ SlashCmdList.FOREVERPLUS = function(msg)
             run.forces = 0
             run.bossDown = {}
             run.killSeen = {}
+            run.killCredit = {}
+            Persist()
             Print("Timer reset to 1:00:00. Bosses and forces cleared.")
         else
             Print("No active key.")

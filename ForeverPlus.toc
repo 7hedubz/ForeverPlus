@@ -1,9 +1,9 @@
 ## Interface: 16001
 ## AllowLoadGameType: camelot
 ## Title: ForeverPlus
-## Notes: Gag Mythic+ timer for every Forever dungeon. One hour on the clock, last boss ends the run, times keep counting after deplete. Compare best clears with anyone else running the addon.
+## Notes: Gag Mythic+ timer: all required bosses plus 100% enemy forces. One hour, continuing through overtime. Compare unverified party/guild best times outside instances.
 ## Author: Dubz
-## Version: 1.0.0
+## Version: 1.0.1
 ## SavedVariables: ForeverPlusDB
 ## IconTexture: Interface\AddOns\ForeverPlus\Media\icon
 ## Category: Dungeons & Raids
