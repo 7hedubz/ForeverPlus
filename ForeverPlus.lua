@@ -3,7 +3,7 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.1.3"
+ns.ver = "1.1.4"
 
 local LIMIT = ns.LIMIT
 local Secret = ns.IsSecret
@@ -87,6 +87,50 @@ end
 ns.DB = DB
 
 local run -- current timed run
+local function RecomputeForces(r)
+    r.kills = r.forcesBaseline + math.max(0, r.nativeCount - r.bossDeductions)
+    r.forces = ns.ForcesPercent(r)
+end
+local function InitForces(r, saved)
+    local valid = saved and Number(saved.forcesBaseline) and Number(saved.nativeCount) and Number(saved.bossDeductions)
+    r.forcesBaseline = valid and Count(saved.forcesBaseline) or Count(r.kills)
+    r.nativeCount = valid and Count(saved.nativeCount) or 0
+    r.bossDeductions = valid and Count(saved.bossDeductions) or 0
+    r.excludedBossKeys = valid and BoolMap(saved.excludedBossKeys) or {}
+    if not valid then
+        -- Old marks predate the ledger: do not deduct them from future kills.
+        for _,boss in ipairs(r.dungeon and r.dungeon.bosses or {}) do
+            if ns.IsBossMarked(r, boss) then r.excludedBossKeys["boss:" .. boss.n] = true end
+        end
+    end
+    RecomputeForces(r)
+end
+local function ActivePartyRun()
+    if not run or not run.active or run.complete or run.practice then return false end
+    local inst = ns.SafeInstance()
+    if not inst or inst.instanceType ~= "party" then return false end
+    local dungeon = ns.ResolveDungeon()
+    if not dungeon then return false end
+    if run.instanceID and inst.instanceID and run.instanceID ~= inst.instanceID then return false end
+    return dungeon.key == run.key or (run.instanceID and run.instanceID == inst.instanceID)
+end
+local function ExcludeBoss(boss, name, source, encounterID)
+    local keys = {}
+    if boss then keys[#keys + 1] = "boss:" .. boss.n
+    elseif name then keys[#keys + 1] = "name:" .. name end
+    if Number(encounterID) and encounterID > 0 then keys[#keys + 1] = "encounter:" .. tostring(encounterID) end
+    local seen = false
+    for _,key in ipairs(keys) do if run.excludedBossKeys[key] then seen = true end end
+    for _,key in ipairs(keys) do run.excludedBossKeys[key] = true end
+    -- Opaque BOSS_KILL receipts count individually. Opaque ENCOUNTER_END is
+    -- deliberately not another deduction: there is no safe identity to dedup.
+    -- Fully opaque duplicates and signals lacking a shared readable alias cannot
+    -- be classified perfectly without GUIDs; never inspect restricted values.
+    if not seen and (#keys > 0 or source == "BOSS_KILL") then
+        run.bossDeductions = run.bossDeductions + 1
+    end
+    RecomputeForces(run)
+end
 local function Persist()
     if not run or run.practice then return end
     DB().currentRun = {
@@ -94,6 +138,8 @@ local function Persist()
         startUnix=run.startUnix, deaths=run.deaths, kills=run.kills,
         bossDown=run.bossDown, killSeen=run.killSeen, killCredit=run.killCredit,
         bossNameSeen=run.bossNameSeen,
+        forcesBaseline=run.forcesBaseline, nativeCount=run.nativeCount,
+        bossDeductions=run.bossDeductions, excludedBossKeys=run.excludedBossKeys,
         confidence=run.confidence, complete=run.complete, sec=run.sec, chest=run.chest, history=run.history,
     }
 end
@@ -200,6 +246,7 @@ function ns.StartRun(dungeon, reason)
         killSeen = {},
         killCredit = {},
     }
+    InitForces(run)
     if ns.History then ns.History.Start(run) end
     Persist()
     if ns.UI then ns.UI.Show() end
@@ -338,6 +385,7 @@ local function ResumeIfNeeded()
         killSeen = saved.killSeen or {},
         killCredit = saved.killCredit or {},
     }
+    InitForces(run, saved)
     if ns.History then ns.History.Resume(run,saved.history) end
     Persist()
     if ns.UI then ns.UI.Show() end
@@ -411,27 +459,14 @@ local function PostBossProgress(bossName, down, total)
     if not ok or result == false then Print("Boss report could not be sent to party chat.") end
 end
 
-function ns.OnCreatureDead(guid, npcId, name, source)
+function ns.OnCreatureDead(guid, npcId, name, source, encounterID)
     if not run or not run.active or run.complete then
         return
     end
-    if run.practice then
-        return
-    end
-    if Secret(name) or type(name) ~= "string" then name = nil end
+    if not ActivePartyRun() then return end
+    if Secret(name) or type(name) ~= "string" or name == "" then name = nil end
     if Secret(guid) then guid = nil end
     if Secret(npcId) then npcId = nil end
-
-    run.killSeen = run.killSeen or {}
-    local isNewKill = NpcIdFromGUID(guid) and run.killCredit and run.killCredit[guid] and not run.killSeen[guid]
-    if isNewKill then run.killSeen[guid] = true end
-    if isNewKill then
-        run.kills = (run.kills or 0) + 1
-        run.forces = ns.ForcesPercent(run)
-        if DB().currentRun then
-            DB().currentRun.kills = run.kills
-        end
-    end
 
     local dungeon = run.dungeon or ns.DungeonByKey(run.key) or ns.ResolveDungeon()
     local _, viaLast = ns.IsLastBossOf(dungeon, npcId, name)
@@ -463,6 +498,9 @@ function ns.OnCreatureDead(guid, npcId, name, source)
 
     local idx, boss = ns.MatchRequiredBoss(dungeon, npcId, name)
     if boss then run.confidence = 3 end
+    if boss or source == "BOSS_KILL" or source == "ENCOUNTER_END" then
+        ExcludeBoss(boss, name, source, encounterID)
+    end
     if boss and not ns.IsBossMarked(run, boss) then
         ns.MarkBoss(run, boss, npcId, name)
         if DB().currentRun then
@@ -554,18 +592,7 @@ local function ScanBossUnits(extraUnit, onlyExtra)
                     end
                 end
             end
-            if npcId and Read(UnitIsPlayer, u) == false then
-                if dead == false and Read(UnitCanAttack, "player", u) == true
-                    and not run.killCredit[guid] and not run.killSeen[guid] and PartyEngaged(u) then
-                    -- Remember engagement while alive: corpses often stop being attackable.
-                    run.killCredit[guid] = true
-                    diagnostics.liveCredits = diagnostics.liveCredits + 1
-                    Persist()
-                elseif dead == true and (run.killCredit[guid] or Read(UnitCanAttack, "player", u) == true) then
-                    ns.OnCreatureDead(guid, npcId, Read(UnitName, u), u)
-                    if run and run.complete then return end
-                end
-            end
+
         end
     end
 end
@@ -648,14 +675,14 @@ f:SetScript("OnEvent", function(_, event, ...)
     if event == "ENCOUNTER_END" then
         local encounterID, encounterName, difficultyID, groupSize, success = ...
         if not Secret(success) and (success == 1 or success == true) then
-            ns.OnCreatureDead(nil, nil, encounterName, "ENCOUNTER_END")
+            ns.OnCreatureDead(nil, nil, encounterName, "ENCOUNTER_END", encounterID)
         end
         return
     end
 
     if event == "BOSS_KILL" then
         local encounterID, encounterName = ...
-        ns.OnCreatureDead(nil, nil, encounterName, "BOSS_KILL")
+        ns.OnCreatureDead(nil, nil, encounterName, "BOSS_KILL", encounterID)
         return
     end
 
@@ -694,24 +721,18 @@ f:SetScript("OnEvent", function(_, event, ...)
         if Secret(attackerGUID) or Secret(targetGUID)
             or type(attackerGUID) ~= "string" or type(targetGUID) ~= "string" then
             diagnostics.nativeUnreadable = diagnostics.nativeUnreadable + 1
-            return
+        else
+            diagnostics.nativeReadable = diagnostics.nativeReadable + 1
         end
-        diagnostics.nativeReadable = diagnostics.nativeReadable + 1
-        local npcId = NpcIdFromGUID(targetGUID)
-        if not npcId or not run or not run.active or run.complete or run.practice then return end
-        local members = {"player", "pet"}
-        for i = 1, 4 do
-            members[#members + 1] = "party" .. i
-            members[#members + 1] = "partypet" .. i
-        end
-        for _, member in ipairs(members) do
-            local guid = Read(UnitGUID, member)
-            if Read(UnitExists, member) == true and type(guid) == "string" and guid == attackerGUID then
-                run.killCredit[targetGUID] = true
-                ns.OnCreatureDead(targetGUID, npcId, nil, "PARTY_KILL")
-                return
-            end
-        end
+        local inst = SafeInstance()
+        if not run or not run.active or run.complete or run.practice
+            or not inst or inst.instanceType ~= "party" then return end
+        local dungeon = ns.ResolveDungeon()
+        if not dungeon or not SameSession(run, dungeon, inst) then return end
+        run.nativeCount = run.nativeCount + 1
+        RecomputeForces(run)
+        Persist()
+        if ns.ObjectivesMet(run) then ns.CompleteRun("objectives", "PARTY_KILL") end
         return
     end
 
@@ -730,15 +751,6 @@ f:SetScript("OnEvent", function(_, event, ...)
         end
         local timestamp, subevent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags = unpack(result, 1, 11)
         if not ok or Secret(subevent) or Secret(sourceFlags) or Secret(destFlags) then return end
-        if run and run.active and not run.practice and NpcIdFromGUID(destGUID) and type(sourceFlags) == "number" and type(destFlags) == "number" and bit and bit.band then
-            local group = bit.band(sourceFlags, 7) ~= 0
-            local hostileNPC = bit.band(destFlags, 64) ~= 0 and bit.band(destFlags, 2048) ~= 0
-            if group and hostileNPC and (subevent == "PARTY_KILL" or subevent == "SWING_DAMAGE" or subevent == "RANGE_DAMAGE" or subevent == "SPELL_DAMAGE" or subevent == "SPELL_PERIODIC_DAMAGE" or subevent == "DAMAGE_SHIELD" or subevent == "DAMAGE_SPLIT") then
-                run.killCredit = run.killCredit or {}
-                run.killCredit[destGUID] = true
-                Persist()
-            end
-        end
         if subevent == "UNIT_DIED" or subevent == "PARTY_KILL" then
             ns.OnCreatureDead(destGUID, NpcIdFromGUID(destGUID), destName, subevent)
         end
@@ -820,6 +832,7 @@ SlashCmdList.FOREVERPLUS = function(msg)
             run.bossNameSeen = {}
             run.killSeen = {}
             run.killCredit = {}
+            InitForces(run)
             if ns.History then ns.History.Start(run) end
             Persist()
             Print("Timer reset to 1:00:00. Bosses and forces cleared.")
@@ -871,7 +884,10 @@ SlashCmdList.FOREVERPLUS = function(msg)
         Print(string.format("v%s | Forces %d%% (%d kills) | CLEU readable %d, empty/restricted %d, errors %d | live credits %d (session) | tracked players %d, party deaths %d.",
             ns.ver, ns.ForcesPercent(run), run and run.kills or 0, diagnostics.cleu, diagnostics.empty, diagnostics.errors, diagnostics.liveCredits,
             history and #history.players or 0, history and ns.History.TotalDeaths(run) or 0))
-        Print(string.format("native PARTY_KILL events %d, readable %d, unreadable %d (session; readable is not kill credit).",
+        Print(string.format("Run raw notifications %d, boss deductions %d, net kills %d (baseline %d).",
+            run and run.nativeCount or 0, run and run.bossDeductions or 0,
+            run and run.kills or 0, run and run.forcesBaseline or 0))
+        Print(string.format("native PARTY_KILL events %d, readable %d, unreadable %d (session; readability is informational only).",
             diagnostics.native, diagnostics.nativeReadable, diagnostics.nativeUnreadable))
         local function flag(v)
             if v == true then return "yes" elseif v == false then return "no" end

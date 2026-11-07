@@ -47,7 +47,7 @@ IsInGroup=function() return true end
 IsInInstance=function() return kind=='party' end
 IsInRaid=function() return false end
 IsInGuild=function() return false end
-issecretvalue=function() return false end
+issecretvalue=function(v) return v=='private-creature-guid' or v=='opaque-attacker' or v=='opaque-target' end
 strsplit=function(delim,str) local parts={};for x in str:gmatch('[^'..delim..']+') do parts[#parts+1]=x end;return unpack(parts) end
 bit=require('bit')
 SlashCmdList={}
@@ -90,13 +90,16 @@ local function emit(sub,guid,name)
  end
 end
 for _,boss in ipairs(ns.DUNGEONS.rfc.bosses) do
+ fire('PARTY_KILL','opaque-attacker','opaque-target')
  fire('BOSS_KILL',0,boss.n)
 end
+assert(ns.GetRun().kills==0,'boss notifications were included in forces')
 local before=#sent
 advance(60)
 for i=1,50 do
  local guid='Creature-0-0-0-0-999-'..i
  emit('SPELL_DAMAGE',guid,'Trash');emit('UNIT_DIED',guid,'Trash')
+ fire('PARTY_KILL','opaque-attacker','opaque-target')
 end
 assert(ns.GetRun().complete)
 assert(ns.GetBest('rfc').sec>=60)
@@ -140,24 +143,27 @@ UnitThreatSituation=function(member,u) if member=='party1' and u=='target' and n
 CombatLogGetCurrentEventInfo=function() end
 fire('COMBAT_LOG_EVENT_UNFILTERED')
 fire('UNIT_HEALTH','target');mob.dead=true;fire('UNIT_HEALTH','target')
-assert(ns.ForcesPercent(ns.GetRun())==2,'closed CLEU visible kill did not count in integrated addon')
+assert(ns.GetRun().kills==0,'visible scans should no longer add forces')
+fire('PARTY_KILL','opaque-attacker','opaque-target')
+assert(ns.ForcesPercent(ns.GetRun())==2,'opaque native kill notification did not count')
 fire('UNIT_FLAGS','target');assert(ns.GetRun().kills==1,'duplicate corpse counted')
 local reports={}
 C_ChatInfo.SendChatMessage=function(msg,ch) reports[#reports+1]={msg=msg,ch=ch} end
+fire('PARTY_KILL','opaque-attacker','opaque-target')
 fire('BOSS_KILL',0,'Ghamoo-ra');fire('ENCOUNTER_END',0,'Ghamoo-ra',1,5,1)
 assert(#reports==1 and reports[1].ch=='PARTY' and reports[1].msg:find('Forces 2%',1,true),'boss party report missing or duplicated')
-print('PASS full addon closed-CLEU visible forces fallback and one boss progress party report')
+print('PASS full addon opaque native forces, no scan double-count, boss exclusion and party report')
 -- Native PARTY_KILL is separate from CLEU and does not require a selected target.
 local noTargetExists,baseGUID=UnitExists,UnitGUID
 UnitExists=function(u) if u=='target' then return false end;return noTargetExists(u) end
-issecretvalue=function(v) return v=='private-creature-guid' end
+issecretvalue=function(v) return v=='private-creature-guid' or v=='opaque-attacker' or v=='opaque-target' end
 UnitGUID=function(u) if u=='target' then return 'private-creature-guid' end;return baseGUID(u) end
 local priorKills=ns.GetRun().kills
 local nativeGUID='Creature-0-0-0-0-4824-native'
 fire('PARTY_KILL','Player-1-Friend',nativeGUID)
 assert(ns.GetRun().kills==priorKills+1,'native party kill required UnitGUID(target) or CLEU')
 fire('PARTY_KILL','Player-1-Friend',nativeGUID)
-assert(ns.GetRun().kills==priorKills+1,'native party kill duplicated')
+assert(ns.GetRun().kills==priorKills+2,'one count per native notification policy not applied')
 local oldExists,oldUnitName,oldAttack=UnitExists,UnitName,UnitCanAttack
 local bossDead=false
 UnitExists=function(u) return u=='party1target' or oldExists(u) end
@@ -166,12 +172,14 @@ UnitName=function(u) if u=='party1target' then return 'Lady Sarevess' end;return
 UnitIsDead=function(u) if u=='party1target' then return bossDead end;return u=='target' and mob.dead or false end
 UnitIsDeadOrGhost=UnitIsDead
 UnitCanAttack=function(a,u) if u=='party1target' then return not bossDead end;return oldAttack(a,u) end
-fire('UNIT_HEALTH','party1target');bossDead=true;fire('UNIT_HEALTH','party1target')
+fire('UNIT_HEALTH','party1target')
+fire('PARTY_KILL','opaque-attacker','opaque-target')
+bossDead=true;fire('UNIT_HEALTH','party1target')
 local down=ns.CountBossesDown(ns.GetRun())
 assert(down==2,'GUID-secret boss was not marked from readable party target name/death')
-assert(ns.GetRun().kills==priorKills+1,'name-only boss invented force credit')
+assert(ns.GetRun().kills==priorKills+2,'boss kill was not excluded from native force count')
 for _,f in ipairs(frames) do if f.events.BOSS_KILL then assert(not f.events.COMBAT_LOG_EVENT_UNFILTERED,'forbidden CLEU registration remains') end end
-print('PASS native party kills without own target and name-only boss credit with secret creature GUID')
+print('PASS event-based party kills without own target and secret-GUID boss exclusion')
 local oldDead=UnitIsDeadOrGhost
 local friendDead=false
 UnitIsDeadOrGhost=function(u) if u=='party1' then return friendDead end;return oldDead(u) end

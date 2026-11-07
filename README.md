@@ -1,10 +1,10 @@
 # ForeverPlus
 
-Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.1.3**, Interface `16001` (Camelot).
+Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.1.4**, Interface `16001` (Camelot).
 
 ## Install / upgrade
 
-Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.1.2 to 1.1.3** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
+Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.1.3 to 1.1.4** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
 
 ## Dungeon journal
 
@@ -45,25 +45,27 @@ Example: you record a dungeon with a friend who has no addon. After they install
 
 Enter a 5-man dungeon to start a one-hour timer. Rewards are **+3 through 36:00**, **+2 through 48:00**, **+1 through 60:00**. Overtime keeps counting and depleted completions still record a time.
 
-Automatic completion requires **all configured required bosses plus 100% enemy forces**: each eligible, party-credited hostile creature kill contributes 2% (50 kills). Boss creature kills may contribute forces. Empty/unverified rosters, such as Shaper's Terrace and unknown dungeons, are manual-only. If a required kill is unavailable to the client, `/fplus complete` is the explicit override.
+Automatic completion requires **all configured required bosses plus 100% enemy forces**: each native party-kill notification contributes 2%, with recognized bosses deducted (50 net non-boss notifications). Bosses do not contribute forces. Empty/unverified rosters, such as Shaper's Terrace and unknown dungeons, are manual-only. If a required kill is unavailable to the client, `/fplus complete` is the explicit override.
 
 Reset/resume and boss-confirmed wing tracking preserve consistent saved state. Completed sessions do not restart merely because of another zone notification or reload; use `/fplus reset` to restart intentionally.
 
-### Visible kill tracking and boss reports
+### Any-mob forces and boss reports
 
-The native **PARTY_KILL** game event is separate from the blocked combat-log stream. When its attacker GUID matches a current party member/pet and its target GUID is a readable creature/vehicle GUID, the addon awards 2% through the same saved GUID deduplication. This path does not require your selected target or `UnitGUID("target")`. Event payload availability still needs live-client confirmation; restricted payloads are rejected, not exposed or guessed.
+Forces now use the requested **event-counting policy**: each native **PARTY_KILL** notification received during an active real party-instance run adds one kill (2%), even when its payload is secret, absent, or unreadable. No selected target, readable GUID, threat, or tap/hostility check is required. Native notifications are the only force-count source; legacy combat-log deaths and visible corpse scans cannot add another force kill.
 
-A secondary visible-unit path is available only when creature GUIDs are readable: living, attackable creatures in combat need readable party/pet threat (or the creature targeting a party member) and a readable false tap-denied flag. Verified visible death then counts even if the corpse is no longer attackable.
+**Bosses are excluded:** recognized boss deaths are deducted once from the native notification total. Required-boss name/alias matching, BOSS_KILL, and successful ENCOUNTER_END signals share exclusion state to avoid subtracting duplicate notifications. Known optional/unknown-roster boss signals are excluded too. Arrival before or after a native notification must converge to the same net count; forces may adjust downward when a boss notification arrives later.
 
-Boss tracking is independent of the force GUID requirement. Readable exact boss names/aliases and verified death can mark a required boss when its GUID is unavailable; prior living-hostile boss evidence covers corpses that stop being attackable. Name-only boss tracking never invents force credit. Mere disappearance is not a death.
+**Opaque boss-signal limit:** a BOSS_KILL receipt with neither readable name nor encounter ID deducts once per receipt. A fully opaque ENCOUNTER_END does not add a second fallback deduction. Duplicate fully opaque boss receipts, or two sources without any shared readable identity, cannot be reliably correlated and may over-deduct; no hidden boss identity is inferred.
 
-Forever forbids CLEU registration on this client, so the addon no longer attempts that protected registration by default. The optional legacy parser remains covered by explicit synthetic-payload tests; those tests do not imply a live combat-log stream exists.
+This is an event counter, not GUID-verified enemy classification: two native notifications count as two events even if any readable payload happens to match. No hidden identifier is read or reconstructed. A boss the client never identifies cannot be distinguished from an ordinary opaque kill; classification is limited to observed boss signals.
 
-A corpse first seen after the kill, loot rights alone, an idle selected mob, or secret/unavailable engagement data does not establish credit. Earlier missed kills cannot be reliably reconstructed and are not invented. Saved credit and deduplication survive reload. Damage/healing still require readable combat events; this forces fallback does not manufacture combat totals.
+The saved run keeps its existing progress when upgrading, then persists its new native-event total, boss deductions, and exclusion state across reload. Earlier rejected session-only notifications are not guessed/backfilled. Reset starts a fresh ledger; completed, abandoned, practice, and non-party-instance runs do not gain forces.
 
-Each newly recorded required boss posts **time remaining (or overtime), current Forces %, and boss progress** to normal PARTY chat. Duplicate boss events do not repeat the report; demo/solo/raid runs do not post. Each addon instance reports its own observation; this is not cross-client announcer election. Failed public sends are not retried, to avoid duplicate chat.
+Boss tracking remains independent of force GUID eligibility: exact readable names/aliases and verified death can identify required bosses with restricted GUIDs. A prior living-hostile observation supports a corpse that stops being attackable; mere disappearance is not a death. Name-only boss tracking excludes the recognized boss but does not create a native kill event.
 
-If forces still do not move, run `/fplus debug` after a party kill. Native-event counters distinguish no PARTY_KILL notifications from readable/restricted event payloads. Target details are optional diagnostics, not a requirement to target enemies while healing. No command attempts to reveal secret GUIDs.
+Each newly recorded required boss posts **time remaining (or overtime), current Forces %, and boss progress** to PARTY chat after the boss deduction. Duplicate signals do not repeat the report; demo/solo/raid runs do not post. Each addon instance reports its own observation, not a cross-client announcer election. Failed public sends are not retried.
+
+The forbidden CLEU registration remains removed. Optional legacy-parser tests are synthetic and do not imply live damage/healing availability. Run `/fplus debug` after a party kill to see the native-event ledger and boss deductions; target details are optional diagnostics, not a gameplay requirement.
 
 ## Commands and minimap
 
