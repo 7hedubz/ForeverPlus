@@ -1,7 +1,7 @@
-ForeverPlus 1.1.1 — WoW Forever dungeon timer and run journal
+ForeverPlus 1.1.2 — WoW Forever dungeon timer and run journal
 ============================================================
 Interface 16001 / Camelot. Install in _forever_/Interface/AddOns/ForeverPlus.
-From 1.1.0: /reload. New install or upgrade from before 1.1.0: fully relaunch.
+From 1.1.0 or 1.1.1: /reload. New install or upgrade from before 1.1.0: fully relaunch.
 
 DUNGEON JOURNAL
 /fplus opens a three-column journal: choose dungeon -> choose run -> stats.
@@ -19,6 +19,10 @@ Damage excludes overkill; healing excludes overhealing. Known pets attribute
 to owners. Group members do not need the addon to appear in your recording.
 Coverage is labeled Observed / Partial / Unavailable. Client restrictions and
 range can limit data; unavailable damage/healing displays as a dash.
+HUD Deaths is the party total; journal rows keep per-player deaths. Readable
+party dead/alive unit states are tracked even without CLEU and deduplicated
+against local/CLEU notifications. Already-dead new joins are baselined, not
+invented as a fresh death. Secret/unavailable states do not invent counts.
 
 SYNC
 /fplus sync, journal Sync runs button, or right-click minimap -> Sync runs.
@@ -36,9 +40,18 @@ One hour; +3 through36:00, +2 through48:00, +1 through60:00. Overtime continues.
 Auto-complete = all configured required bosses +100% forces (50 credited
 hostile creature kills at2% each). Unknown/empty rosters require manual finish.
 
+Visible forces fallback observes living hostile party-engaged mobs, stores GUID
+credit, and counts verified death even when a corpse stops being attackable.
+It requires readable combat/tap state plus party threat or the enemy targeting
+a party member. Unseen corpses and old missed kills are not retroactively counted.
+Keep enemy nameplates/party targets visible. Damage/healing still need CLEU.
+Each new required boss posts time remaining/overtime and Forces% to PARTY chat,
+once per recorded boss per addon instance. No demo/solo/raid announcements.
+
 COMMANDS
 /fplus                 dungeon journal
 /fplus sync            synchronize eligible participant run histories
+/fplus debug           show CLEU/visible credit and target API availability
 /fplus lock            toggle timer dragging lock
 /fplus reset           archive reset attempt; restart timer/objectives/stats
 /fplus complete        force-complete current real run

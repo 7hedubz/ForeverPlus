@@ -8,6 +8,8 @@ local function boot(db)
  ForeverPlusDB=db or {}; SlashCmdList={}
  issecretvalue=function(v) return rawequal(v,secret) end
  GetTime=function() return s.clock end; time=function() return s.unix end
+ IsInGroup=function() return s.group==true end; IsInRaid=function() return s.raid==true end
+ SendChatMessage=nil; C_ChatInfo=nil
  GetInstanceInfo=function() return s.name,s.kind,1,'Normal',5,0,false,s.id end
  GetRealZoneText=function() return s.name end; GetSubZoneText=function() return s.sub end; GetMinimapZoneText=function() return '' end
  UnitName=function(u) if u=='player' then return 'Tester' end return (s.units[u] or {}).name end
@@ -17,7 +19,14 @@ local function boot(db)
  UnitGUID=function(u) return (s.units[u] or {}).guid end
  UnitIsPlayer=function(u) return (s.units[u] or {}).player or false end
  UnitCanAttack=function(_,u) return (s.units[u] or {}).hostile end
- UnitIsTapDenied=function() return false end
+ UnitIsTapDenied=function(u) local v=(s.units[u] or {}).tapDenied; if v==nil then return false end; return v end
+ UnitAffectingCombat=function(u) return (s.units[u] or {}).combat end
+ UnitThreatSituation=function(member,u) return ((s.units[u] or {}).threat or {})[member] end
+ UnitIsUnit=function(a,b)
+  local target=a:match('^(.*)target$')
+  if target and s.units[target] then a=s.units[target].targetUnit end
+  return a~=nil and s.units[a]~=nil and s.units[b]~=nil and s.units[a].guid==s.units[b].guid
+ end
  strsplit=function(delim,str) local t={}; for x in str:gmatch('[^'..delim..']+') do t[#t+1]=x end return unpack(t) end
  bit=require('bit'); COMBATLOG_OBJECT_AFFILIATION_MINE=1; COMBATLOG_OBJECT_AFFILIATION_PARTY=2; COMBATLOG_OBJECT_AFFILIATION_RAID=4
  COMBATLOG_OBJECT_REACTION_HOSTILE=64; COMBATLOG_OBJECT_TYPE_NPC=2048
@@ -131,6 +140,90 @@ test('abandoning practice preserves underlying completed session inside dungeon'
  local s,n=boot(); n.StartRun(n.DUNGEONS.rfc); s.clock=160; n.CompleteRun('test'); n.ToggleDemo()
  SlashCmdList.FOREVERPLUS('abandon'); assert(ForeverPlusDB.currentRun and ForeverPlusDB.currentRun.complete)
  n.CheckZone(); assert(n.GetRun().complete and not n.GetRun().active)
+end)
+test('closed combat log visible party fight then unattackable corpse gives two percent once',function()
+ local s,n=boot();s.name='Blackfathom Deeps';s.id=48
+ s.units.player={guid='Player-1',player=true};s.units.party1={guid='Player-2',player=true}
+ local r=n.StartRun(n.DUNGEONS.bfd)
+ s.units.target={guid='Creature-0-0-0-0-4824-1',name='Murkshallow Snapclaw',dead=false,hostile=true,combat=true,threat={party1=2}}
+ s.tick(); eq(r.kills,0)
+ s.units.target.dead=true;s.units.target.hostile=false;s.units.target.combat=false
+ s.tick();eq(r.kills,1);eq(n.ForcesPercent(r),2)
+ s.tick();s.event(nil,'UPDATE_MOUSEOVER_UNIT');eq(r.kills,1)
+end)
+test('unseen corpses unengaged targets outsiders and restricted evidence never earn forces',function()
+ for _,mode in ipairs({'corpse','idle','outsider','secretThreat','secretTap'}) do
+  local s,n=boot();s.units.player={guid='Player-1',player=true};local r=n.StartRun(n.DUNGEONS.rfc)
+  local u={guid='Creature-0-0-0-0-4824-1',name='Murkshallow Snapclaw',dead=false,hostile=true,combat=true,threat={player=1}}
+  s.units.target=u
+  if mode=='corpse' then u.dead=true;u.hostile=false
+  elseif mode=='idle' then u.combat=false;u.threat={}
+  elseif mode=='outsider' then u.tapDenied=true
+  elseif mode=='secretThreat' then u.threat.player=secret
+  else u.tapDenied=secret end
+  s.tick();u.dead=true;u.hostile=false;s.tick();eq(r.kills,0)
+ end
+end)
+test('enemy targeting party is fallback credit when threat API is unavailable',function()
+ local s,n=boot();s.units.party1={guid='Player-2',player=true};local r=n.StartRun(n.DUNGEONS.rfc)
+ UnitThreatSituation=nil
+ s.units.target={guid='Creature-0-0-0-0-4824-1',name='Murkshallow Snapclaw',dead=false,hostile=true,combat=true,targetUnit='party1'}
+ s.event(nil,'UNIT_HEALTH','target');s.units.target.dead=true;s.units.target.hostile=false
+ s.event(nil,'UNIT_HEALTH','target');eq(r.kills,1)
+end)
+test('live fallback evidence survives reload and counts one corpse after resume',function()
+ local s,n=boot();s.units.player={guid='Player-1',player=true};n.StartRun(n.DUNGEONS.rfc)
+ local u={guid='Creature-0-0-0-0-4824-1',name='Murkshallow Snapclaw',dead=false,hostile=true,combat=true,threat={player=2}}
+ s.units.target=u;s.tick();local db=ForeverPlusDB
+ s,n=boot(db);s.units.target=u;s:entry();u.dead=true;u.hostile=false;s.tick();eq(n.GetRun().kills,1)
+ s.tick();eq(n.GetRun().kills,1)
+end)
+test('sparse UNIT_DIED tuple retains destination GUID after absent source fields',function()
+ local s,n=boot();local r=n.StartRun(n.DUNGEONS.rfc);local g='Creature-0-0-0-0-4824-1'
+ s:emit('SPELL_DAMAGE',g,'Murkshallow Snapclaw')
+ CombatLogGetCurrentEventInfo=function() return 1,'UNIT_DIED',false,nil,nil,nil,nil,g,nil,nil,nil end
+ s.event(nil,'COMBAT_LOG_EVENT_UNFILTERED');eq(r.kills,1)
+end)
+test('debug reports combat log and visible credit state without exposing secret values',function()
+ local s,n=boot();local messages={}
+ DEFAULT_CHAT_FRAME={AddMessage=function(_,m) messages[#messages+1]=m end}
+ n.StartRun(n.DUNGEONS.rfc);s.units.target={guid=secret,name=secret,dead=secret,hostile=secret,combat=secret}
+ SlashCmdList.FOREVERPLUS('debug')
+ local out=table.concat(messages,'\n');assert(out:find('CLEU',1,true) and out:find('live credits',1,true),'diagnostics unavailable')
+ DEFAULT_CHAT_FRAME=nil
+end)
+test('boss posts remaining time and forces once per recorded boss in party chat',function()
+ local s,n=boot();s.group=true;local sent={}
+ SendChatMessage=function(msg,ch) sent[#sent+1]={msg=msg,ch=ch} end
+ n.StartRun(n.DUNGEONS.rfc);s.clock=160
+ for i=1,3 do s:kill(i) end
+ n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL')
+ eq(#sent,1);eq(sent[1].ch,'PARTY');assert(sent[1].msg:find('59:00',1,true));assert(sent[1].msg:find('Forces 6%',1,true));assert(sent[1].msg:find('1/4',1,true))
+ n.OnCreatureDead(nil,11517,'Oggleflint','ENCOUNTER_END');n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(#sent,1)
+ s.clock=100+n.LIMIT+300;n.OnCreatureDead(nil,11520,'Taragaman the Hungerer','BOSS_KILL')
+ eq(#sent,2);assert(sent[2].msg:find('Overtime +5:00',1,true))
+ local db=ForeverPlusDB;s,n=boot(db);s.group=true;SendChatMessage=function(msg,ch) sent[#sent+1]={msg=msg,ch=ch} end
+ s:entry();n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(#sent,2)
+end)
+test('boss party reporting uses modern chat fallback but never reports solo raid or demo',function()
+ local s,n=boot();s.group=true;local sent={}
+ C_ChatInfo={SendChatMessage=function(msg,ch) sent[#sent+1]={msg=msg,ch=ch} end}
+ n.StartRun(n.DUNGEONS.rfc);n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(#sent,1)
+ s.group=false;n.OnCreatureDead(nil,11520,'Taragaman the Hungerer','BOSS_KILL');eq(#sent,1)
+ s.group=true;s.raid=true;n.OnCreatureDead(nil,11518,'Jergosh the Invoker','BOSS_KILL');eq(#sent,1)
+ n.AbandonRun('test');n.ToggleDemo();n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(#sent,1)
+end)
+test('chat send failure does not interrupt boss credit or retry duplicate public messages',function()
+ local s,n=boot();s.group=true;local calls=0
+ SendChatMessage=function() calls=calls+1;error('chat unavailable') end
+ local r=n.StartRun(n.DUNGEONS.rfc);n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL')
+ eq(n.CountBossesDown(r),1);n.OnCreatureDead(nil,11517,'Oggleflint','BOSS_KILL');eq(calls,1)
+end)
+test('unit health handles its visible unit without rescanning every nameplate',function()
+ local s,n=boot();n.StartRun(n.DUNGEONS.rfc);local scans=0
+ C_NamePlate={GetNamePlates=function() scans=scans+1;return {} end}
+ s.event(nil,'UNIT_HEALTH','target');eq(scans,0)
+ C_NamePlate=nil
 end)
 for _,t in ipairs(tests) do local ok,err=pcall(t[2]); if ok then passed=passed+1; print('PASS '..t[1]) else print('FAIL '..t[1]..': '..err) end end
 print(string.format('%d/%d passed',passed,#tests)); if passed~=#tests then os.exit(1) end

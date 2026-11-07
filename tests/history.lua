@@ -44,7 +44,7 @@ local function core(db)
  GetInstanceInfo=function() return 'Ragefire Chasm','party',1,'Normal',5,0,false,389 end
  GetRealZoneText=function() return 'Ragefire Chasm' end
  CreateFrame=function() return {RegisterEvent=function() end,SetScript=function(_,_,fn) s.event=fn end} end
- C_Timer={After=function(_,fn) fn() end,NewTicker=function() end}; SlashCmdList={}
+ C_Timer={After=function(_,fn) fn() end,NewTicker=function(_,fn) s.tick=fn end}; SlashCmdList={}
  CombatLogGetCurrentEventInfo=function() return unpack(s.cleu) end
  assert(loadfile('ForeverPlus.lua'))('ForeverPlus',n)
  function s:emit(kind,src,dst,...)
@@ -52,6 +52,14 @@ local function core(db)
  end
  return s,n,h
 end
+test('readable teammate death without CLEU is counted once and resurrects for a second death',function()
+ local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc);local p=r.history.players[2]
+ s.units.party1.dead=true;s.event(nil,'UNIT_HEALTH','party1');s.event(nil,'UNIT_FLAGS','party1')
+ assert(p.deaths==1,'visible teammate corpse must count without CLEU');assert(r.deaths==0,'legacy counter stays local')
+ assert(h.TotalDeaths(r)==1)
+ s.units.party1.dead=false;s.event(nil,'UNIT_FLAGS','party1');s.units.party1.dead=true;s.event(nil,'UNIT_HEALTH','party1')
+ assert(p.deaths==2 and h.TotalDeaths(r)==2 and r.deaths==0)
+end)
 test('core records non-addon roster effective pet stats local deaths and archives',function()
  local s,n,h=core(); local r=n.StartRun(n.DUNGEONS.rfc)
  s:emit('SWING_DAMAGE','Player-1','Creature-1',120,20)
@@ -67,7 +75,7 @@ test('active stats persist reload reset archives and resurrection permits anothe
  local s,n,h=core();n.StartRun(n.DUNGEONS.rfc);s:emit('SWING_DAMAGE','Player-1','Creature-1',100,-1)
  s.units.player.dead=true;s.event(nil,'PLAYER_DEAD');local db=ForeverPlusDB;s,n,h=core(db);s.units.player.dead=true;s.event(nil,'PLAYER_ENTERING_WORLD')
  s:emit('UNIT_DIED','Creature-1','Player-1');assert(n.GetRun().deaths==1)
- s.event(nil,'PLAYER_ALIVE');s.event(nil,'PLAYER_DEAD');assert(n.GetRun().deaths==2)
+ s.units.player.dead=false;s.event(nil,'PLAYER_ALIVE');s.units.player.dead=true;s.event(nil,'PLAYER_DEAD');assert(n.GetRun().deaths==2)
  s.clock=200;s.unix=100100;SlashCmdList.FOREVERPLUS('reset');assert(#h.List()==1 and h.List()[1].status=='reset')
  assert(h.List()[1].players[1].damage==100);s.clock=250;s.unix=100150;n.AbandonRun('slash');assert(#h.List()==2)
  assert(h.List()[1].players[1].damage==0)
@@ -146,7 +154,7 @@ end)
 test('local deaths work without GUID and sync lifecycle forwards safely',function()
  local s,n,h=core();s.units.player.guid=nil;n.StartRun(n.DUNGEONS.rfc)
  s.event(nil,'PLAYER_DEAD');s.event(nil,'PLAYER_DEAD');assert(n.GetRun().deaths==1)
- s.event(nil,'PLAYER_ALIVE');s.event(nil,'PLAYER_DEAD');assert(n.GetRun().deaths==2)
+ s.units.player.dead=false;s.event(nil,'PLAYER_ALIVE');s.units.player.dead=true;s.event(nil,'PLAYER_DEAD');assert(n.GetRun().deaths==2)
  local called={};n.Sync={Init=function() called.init=true end,OnZone=function() called.zone=true end,OnRoster=function() called.roster=true end,Request=function(why) called.reason=why end}
  s.event(nil,'PLAYER_LOGIN');s.event(nil,'PLAYER_ENTERING_WORLD');s.event(nil,'GROUP_ROSTER_UPDATE');SlashCmdList.FOREVERPLUS('sync')
  assert(called.init and called.zone and called.roster and called.reason=='manual')
@@ -166,6 +174,100 @@ test('successful real completion queues archive sync once while demo and invalid
  local old=UnitFullName;UnitFullName=function() return nil end;local oldName=UnitName;UnitName=function() return nil end
  assert(not h.Archive(r,'completed',false));assert(#calls==1)
  UnitFullName=old;UnitName=oldName
+end)
+test('roster baseline suppresses existing corpses and periodic scan catches missed transitions',function()
+ local s,n,h=core();s.units.party1.dead=true;local r=n.StartRun(n.DUNGEONS.rfc);local p=r.history.players[2]
+ s.event(nil,'UNIT_HEALTH','party1');s.tick();assert(p.deaths==0,'starting corpse is baseline, not a new death')
+ s.units.party1.dead=false;s.clock=s.clock+1;s.tick()
+ s.units.party1.dead=true;s.clock=s.clock+1;s.tick();assert(p.deaths==1,'periodic scan must catch a missed unit event')
+ s.units.party1=nil;s.event(nil,'GROUP_ROSTER_UPDATE');s.clock=s.clock+1;s.tick();assert(h.TotalDeaths(r)==1)
+ s.units.party1={name='Peer',guid='Player-2',class='PRIEST',dead=true};s.event(nil,'GROUP_ROSTER_UPDATE');s.tick();assert(p.deaths==1,'same GUID rejoin must retain latch')
+ s.units.party2={name='Corpse',guid='Player-3',class='MAGE',dead=true};s.event(nil,'GROUP_ROSTER_UPDATE');s.event(nil,'UNIT_FLAGS','party2');assert(h.TotalDeaths(r)==1,'joining corpse is baseline')
+ s.units.party3={name='Living',guid='Player-4',class='MAGE'};s.event(nil,'GROUP_ROSTER_UPDATE')
+ s.units.party3.dead=true;s.clock=s.clock+1;s.tick();assert(h.TotalDeaths(r)==2,'living late join must be tracked')
+end)
+test('local mixed ordering stale alive polls and reload cannot undo the death latch',function()
+ for _,first in ipairs({'PLAYER_DEAD','CLEU','POLL'}) do
+  local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
+  if first=='CLEU' then s:emit('UNIT_DIED','Creature-1','Player-1')
+  elseif first=='POLL' then s.units.player.dead=true;s.tick()
+  else s.event(nil,'PLAYER_DEAD') end
+  s.event(nil,'PLAYER_DEAD');s.clock=s.clock+1;s.tick();s.event(nil,'UNIT_FLAGS','player');s.event(nil,'GROUP_ROSTER_UPDATE')
+  s:emit('UNIT_DIED','Creature-1','Player-1');assert(r.deaths==1,first..' stale alive read undid latch')
+  local db=ForeverPlusDB;s,n,h=core(db);s.units.player.dead=(first=='POLL');s.event(nil,'PLAYER_ENTERING_WORLD');r=n.GetRun()
+  s.event(nil,'PLAYER_DEAD');s:emit('UNIT_DIED','Creature-1','Player-1');assert(r.deaths==1,first..' reload undid latch')
+  s.units.player.dead=true;s.event(nil,'UNIT_HEALTH','player');s.units.player.dead=false;s.event(nil,'UNIT_FLAGS','player')
+  s.units.player.dead=true;s.event(nil,'PLAYER_DEAD');s.clock=s.clock+1;s.tick();assert(r.deaths==2)
+ end
+end)
+test('reload retains verified dead state so a real resurrection permits the next death',function()
+ local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
+ s:emit('SWING_DAMAGE','Player-1','Creature-1',100,0)
+ s.units.party1.dead=true;s.event(nil,'UNIT_HEALTH','party1')
+ local db=ForeverPlusDB;s,n,h=core(db);s.event(nil,'PLAYER_ENTERING_WORLD');r=n.GetRun()
+ assert(r.history.players[1].damage==100 and h.TotalDeaths(r)==1)
+ -- Already resurrected when the client comes back: saved verified-dead evidence must survive.
+ s.units.party1.dead=true;s.event(nil,'UNIT_FLAGS','party1')
+ assert(h.TotalDeaths(r)==2,'resume must preserve verified state and accept a later real death')
+end)
+test('death identity rejects secret or mismatched GUID and uses canonical names only when GUID absent',function()
+ local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
+ secret={};assert(not h.Death(r,secret,true),'secret GUID must not become a local death');secret=nil
+ assert(not h.Death(r,'Player-Stranger',true),'mismatched GUID must not fall back to local player')
+ local guid=UnitGUID;secret={};UnitGUID=function(u) if u=='player' then return secret end;return guid(u) end
+ s.event(nil,'PLAYER_DEAD');assert(r.deaths==0,'event must not erase secret GUID before matching')
+ UnitGUID=guid;secret=nil
+ s.units.party1.guid=nil;s.units.party1.dead=true;s.event(nil,'UNIT_HEALTH','party1')
+ assert(r.history.players[2].deaths==1,'canonical roster name must work when GUID is unavailable')
+ assert(r.deaths==0)
+end)
+test('resurrection notifications need readable living state and cannot erase restricted identity latch',function()
+ local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
+ s.units.player.dead=true;s.event(nil,'PLAYER_DEAD');s.event(nil,'UNIT_HEALTH','player')
+ s.event(nil,'PLAYER_ALIVE');s.event(nil,'PLAYER_DEAD');assert(r.deaths==1,'alive event while still dead must not clear latch')
+ s:emit('SPELL_RESURRECT','Player-2','Player-1');s:emit('UNIT_DIED','Creature-1','Player-1');assert(r.deaths==1,'resurrection cast alone is not a verified resurrection')
+ s.units.player.dead=false;local guid=UnitGUID;secret={};UnitGUID=function() return secret end
+ s.event(nil,'PLAYER_UNGHOST');UnitGUID=guid;secret=nil;s.event(nil,'PLAYER_DEAD');assert(r.deaths==1,'secret GUID must not clear local latch')
+ s.event(nil,'PLAYER_ALIVE');s.event(nil,'PLAYER_DEAD');assert(r.deaths==2,'verified alive event permits next death')
+end)
+test('debug includes tracked players and party death total with optional history',function()
+ local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
+ s.units.party1.dead=true;s.event(nil,'UNIT_HEALTH','party1')
+ local out={};DEFAULT_CHAT_FRAME={AddMessage=function(_,message) out[#out+1]=message end}
+ SlashCmdList.FOREVERPLUS('debug');local message=table.concat(out,'\n');assert(message:find('tracked players 2',1,true) and message:find('party deaths 1',1,true),'debug must report roster and party total')
+ out={};n.History=nil;SlashCmdList.FOREVERPLUS('debug');assert(table.concat(out,'\n'):find('tracked players 0',1,true))
+ DEFAULT_CHAT_FRAME=nil
+end)
+test('late readable GUID preserves name-keyed death baseline and deduplication',function()
+ local s,n,h=core();s.units.party1.guid=nil;local r=n.StartRun(n.DUNGEONS.rfc)
+ assert(h.Death(r,nil,false,'Peer-Realm'));assert(h.TotalDeaths(r)==1)
+ s.units.party1.guid='Player-2';s.event(nil,'GROUP_ROSTER_UPDATE');s:emit('UNIT_DIED','Creature-1','Player-2')
+ assert(h.TotalDeaths(r)==1,'GUID promotion must migrate the canonical-name death latch')
+ s.units.party1.dead=true;s.event(nil,'UNIT_FLAGS','party1')
+ s.units.party1.dead=false;s.event(nil,'UNIT_FLAGS','party1');s.units.party1.dead=true;s.event(nil,'UNIT_HEALTH','party1');assert(h.TotalDeaths(r)==2)
+end)
+test('unavailable restricted and absent party reads never invent deaths or clear latches',function()
+ local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc);local exists,dead,guid=UnitExists,UnitIsDeadOrGhost,UnitGUID
+ for _,field in ipairs({'exists','dead','guid'}) do
+  for _,value in ipairs({'nil','secret','throw'}) do
+   if not (field=='guid' and value=='nil') then -- Missing GUID with a readable canonical name is intentionally supported.
+    secret={};local function unreadable() if value=='throw' then error('restricted') elseif value=='secret' then return secret end end
+    UnitExists=field=='exists' and unreadable or exists;UnitIsDeadOrGhost=field=='dead' and unreadable or dead;UnitGUID=field=='guid' and unreadable or guid
+    s.units.party1.dead=true;s.event(nil,'UNIT_HEALTH','party1');s.clock=s.clock+1;s.tick();assert(h.TotalDeaths(r)==0,field..' '..value)
+   end
+  end
+ end
+ UnitExists=exists;UnitIsDeadOrGhost=dead;UnitGUID=guid;secret=nil
+ s.event(nil,'UNIT_FLAGS','party1');assert(h.TotalDeaths(r)==1)
+ s.units.party1=nil;s.event(nil,'UNIT_HEALTH','party1');s.clock=s.clock+1;s.tick();assert(r.history.dead['Player-2'])
+end)
+test('completed inactive and practice runs cannot gain new deaths',function()
+ local s,n,h=core();local r=n.StartRun(n.DUNGEONS.rfc)
+ s.units.party1.dead=true;s.event(nil,'UNIT_FLAGS','party1');s.clock=200;s.unix=100100;n.CompleteRun('test')
+ s.units.party1.dead=false;s.event(nil,'UNIT_FLAGS','party1');s.units.party1.dead=true;s.event(nil,'UNIT_HEALTH','party1');s:emit('UNIT_DIED','Creature-1','Player-2');s.event(nil,'PLAYER_DEAD');s.tick()
+ assert(h.TotalDeaths(r)==1 and h.List()[1].players[2].deaths==1 and r.deaths==0)
+ r.active=true;assert(not h.Death(r,'Player-1'),'completed wins even with stale active flag');r.active=false;r.complete=false;assert(not h.Death(r,'Player-1'))
+ r.active=true;r.practice=true;assert(not h.Death(r,'Player-1'));h.UnitState(r,'player');assert(h.TotalDeaths(r)==1)
 end)
 local failures=0
 for _,t in ipairs(tests) do local ok,e=pcall(t[2]); if ok then print('PASS '..t[1]) else failures=failures+1; print('FAIL '..t[1]..': '..tostring(e)) end end

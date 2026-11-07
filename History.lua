@@ -122,6 +122,23 @@ end
 local function find(s,guid,name)
  for _,p in ipairs(s.players) do if (guid and guid~='' and p.guid==guid) or (name and H.SamePlayer(p.name,name)) then return p end end
 end
+local function unitIdentity(u)
+ -- Do not collapse a restricted GUID into nil and then attribute it by name.
+ local ok,guid=pcall(UnitGUID,u)
+ if not ok or secret(guid) or (guid~=nil and not text(guid,96,true)) then return end
+ local name,realm=read(UnitFullName,u)
+ if not text(name,96) then name,realm=read(UnitName,u) end
+ if text(name,96) and not name:find('-',1,true) then
+  if not text(realm,96) then realm=read(GetNormalizedRealmName) or read(GetRealmName) end
+  if text(realm,96) then name=name..'-'..realm:gsub('%s+','') end
+ end
+ return guid or '',identity(name)
+end
+local function deathPlayer(s,guid,localPlayer,name)
+ if secret(guid) then return end
+ if guid~=nil and guid~='' then return text(guid,96) and find(s,guid) end
+ return find(s,nil,name or (localPlayer and ns.PlayerFull()))
+end
 function H.Roster(r,petOnly)
  if not r or r.practice or not r.history then return end
  local s=r.history
@@ -130,26 +147,24 @@ function H.Roster(r,petOnly)
  s.primaryPets={}; local owners={}
  for _,u in ipairs(units) do
   if u=='player' or read(UnitExists,u)==true then
-   local name,realm=read(UnitFullName,u)
-   if not text(name,96) then name,realm=read(UnitName,u) end
-   if text(name,96) and not name:find('-',1,true) then
-    if not text(realm,96) then realm=read(GetNormalizedRealmName) or read(GetRealmName) end
-    if text(realm,96) then name=name..'-'..realm:gsub('%s+','') end
-   end
-   name=identity(name)
-   local guid=read(UnitGUID,u); if not text(guid,96,true) then guid='' end
-   if name then
+   local guid,name=unitIdentity(u)
+   if guid and name then
     local p=find(s,guid,name)
     if not p and #s.players<10 then
      local _,class=read(UnitClass,u); if not text(class,16,true) or not classes[class] then class='' end
      p={guid=guid,name=name,class=class,damage=0,healing=0,deaths=0};s.players[#s.players+1]=p
     end
     if p then
-     if p.guid=='' and guid~='' then p.guid=guid end
+     if p.guid=='' and guid~='' then
+      for _,field in ipairs({'dead','states'}) do
+       if s[field] then s[field][guid]=s[field][p.name];s[field][p.name]=nil end
+      end
+      p.guid=guid
+     end
      if p.guid~='' and guid==p.guid then owners[p.guid]=true end
      local pet=read(UnitGUID,u=='player' and 'pet' or 'partypet'..u:match('%d+'))
      if text(pet,96) and owners[p.guid] then s.primaryPets[pet]=p.guid end
-     if not petOnly and read(UnitExists,u)==true and read(UnitIsDeadOrGhost,u)==false then s.dead[p.guid~='' and p.guid or p.name]=nil end
+     if not petOnly then H.UnitState(r,u) end
     end
    end
   end
@@ -169,9 +184,14 @@ function H.Resume(r,saved)
  if secret(saved) or type(saved)~='table' or getmetatable(saved) then return end
  local candidate={id=saved.id,dungeonKey=r.key,dungeonName=r.name,startUnix=r.startUnix,endUnix=math.max(r.startUnix,read(time) or r.startUnix),sec=1,status='abandoned',manual=false,recordedBy=saved.recordedBy,coverage='partial',players=saved.players}
  local v=H.Validate(candidate); if not v then return end
- r.history={id=v.id,recordedBy=v.recordedBy,players=v.players,coverage='partial',dead={},pets={}}
- if not secret(saved.dead) and type(saved.dead)=='table' and not getmetatable(saved.dead) then
-  for _,p in ipairs(v.players) do local key=p.guid~='' and p.guid or p.name; if not secret(saved.dead[key]) and saved.dead[key]==true then r.history.dead[key]=true end end
+ r.history={id=v.id,recordedBy=v.recordedBy,players=v.players,coverage='partial',dead={},states={},pets={}}
+ for _,field in ipairs({'dead','states'}) do
+  if not secret(saved[field]) and type(saved[field])=='table' and not getmetatable(saved[field]) then
+   for _,p in ipairs(v.players) do
+    local key=p.guid~='' and p.guid or p.name;local value=saved[field][key]
+    if not secret(value) and type(value)=='boolean' then r.history[field][key]=value end
+   end
+  end
  end
  H.Roster(r)
 end
@@ -181,10 +201,9 @@ local function forgetPets(s,guid)
   for pet,owner in pairs(map) do if pet==guid or owner==guid then map[pet]=nil end end
  end
 end
-function H.Death(r,guid,localPlayer)
- if not r or not r.active or r.practice or not r.history then return false end
- local s=r.history; forgetPets(s,guid); local p=text(guid,96) and find(s,guid)
- if not p and localPlayer then p=find(s,nil,ns.PlayerFull()) end
+function H.Death(r,guid,localPlayer,name)
+ if not r or not r.active or r.complete or r.practice or not r.history then return false end
+ local s=r.history; forgetPets(s,guid); local p=deathPlayer(s,guid,localPlayer,name)
  if not p then return false end
  local key=p.guid~='' and p.guid or p.name
  if s.dead[key] then return false end
@@ -192,10 +211,41 @@ function H.Death(r,guid,localPlayer)
  if H.SamePlayer(p.name,ns.PlayerFull()) then r.deaths=(r.deaths or 0)+1 end
  return true
 end
-function H.Alive(r,guid,localPlayer)
+function H.TotalDeaths(r)
+ local total=0
+ if r and r.history then for _,p in ipairs(r.history.players) do total=total+(p.deaths or 0) end end
+ return total
+end
+function H.UnitState(r,u,resurrection)
+ if not r or not r.active or r.complete or r.practice or not r.history then return end
+ if not text(u,16) or (u~='player' and not u:match('^party[1-4]$')) or read(UnitExists,u)~=true then return end
+ local s=r.history;local guid,name=unitIdentity(u)
+ if not guid then return end
+ local p=deathPlayer(s,guid,false,name)
+ if not p then return end
+ local key=p.guid~='' and p.guid or p.name
+ s.states=s.states or {}
+ local dead=read(UnitIsDeadOrGhost,u)
+ if type(dead)~='boolean' then return end
+ if s.states[key]==nil then
+  -- The first readable state is a baseline, not an inferred death.
+  s.states[key]=dead;if dead then s.dead[key]=true end
+ elseif dead then H.Death(r,guid,false,name);s.states[key]=true
+ elseif not s.dead[key] or s.states[key]==true or resurrection then
+  -- Passive alive reads cannot undo a death notification until the corpse was
+  -- actually observed. Explicit resurrection events still require readable alive.
+  H.Alive(r,guid,false,name);s.states[key]=false
+ end
+end
+function H.UnitDeath(r,u)
+ if read(UnitExists,u)~=true then return false end
+ local guid,name=unitIdentity(u)
+ if guid then return H.Death(r,guid,false,name) end
+ return false
+end
+function H.Alive(r,guid,localPlayer,name)
  if not r or not r.history then return end
- local p=text(guid,96) and find(r.history,guid)
- if not p and localPlayer then p=find(r.history,nil,ns.PlayerFull()) end
+ local p=deathPlayer(r.history,guid,localPlayer,name)
  if p then r.history.dead[p.guid~='' and p.guid or p.name]=nil end
 end
 function H.Observe(r,e)
@@ -205,7 +255,14 @@ function H.Observe(r,e)
  if secret(kind) or not text(kind,64) or secret(src) or secret(dst) then s.coverage='partial';return end
  if kind=='UNIT_DIED' then H.Death(r,dst);return end
  if kind=='UNIT_DESTROYED' or kind=='UNIT_DISSIPATES' then forgetPets(s,dst);return end
- if kind=='SPELL_RESURRECT' then H.Alive(r,dst);return end
+ if kind=='SPELL_RESURRECT' then
+  if text(dst,96) then
+   for _,u in ipairs({'player','party1','party2','party3','party4'}) do
+    local guid=unitIdentity(u);if guid==dst then H.UnitState(r,u,true) end
+   end
+  end
+  return
+ end
  local petOwner=text(src,96) and (s.pets[src] or (s.primaryPets and s.primaryPets[src]))
  local owner=text(src,96) and (find(s,src) or (petOwner and find(s,petOwner)))
  if not owner then return end

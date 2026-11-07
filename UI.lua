@@ -629,7 +629,8 @@ function UI.Tick()
     else
         frame.best:SetText("Best: —")
     end
-    frame.deaths:SetText("Deaths: " .. tostring(run.deaths or 0))
+    local deaths = ns.History and run.history and ns.History.TotalDeaths(run) or run.deaths or 0
+    frame.deaths:SetText("Deaths: " .. tostring(deaths))
     if frame.obj then
         local down, total = ns.CountBossesDown(run)
         local fp = ns.ForcesPercent(run)

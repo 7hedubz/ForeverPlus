@@ -1,10 +1,10 @@
 # ForeverPlus
 
-Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.1.1**, Interface `16001` (Camelot).
+Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.1.2**, Interface `16001` (Camelot).
 
 ## Install / upgrade
 
-Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading **1.1.0 → 1.1.1** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
+Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0 or 1.1.1 to 1.1.2** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
 
 ## Dungeon journal
 
@@ -25,6 +25,8 @@ New completed runs are recorded, including overtime and manually completed runs.
 The addon snapshots group members, including members who do not have ForeverPlus, and records the combat events this client can observe. Damage excludes overkill, healing excludes overhealing, known pets are attributed to their owners, and duplicate death notifications are deduplicated. Roster changes are retained within the run's participant limit.
 
 Coverage is explicitly labeled **Observed**, **Partial**, or **Unavailable**. Observed does not mean server-certified or globally complete. If Forever restricts combat information, unavailable damage/healing is shown as a dash rather than fabricated zero totals. Range, restrictions, disconnected clients, and joining mid-run can limit what was observed.
+
+The timer HUD's **Deaths** is the total for the recorded party, including members who do not have the addon. The journal retains each participant's own death count. Readable party dead/alive unit state is observed directly as well as CLEU/local death events; resurrection clears the per-player latch so another death can count, while duplicate death notifications do not. Unavailable or secret unit values do not invent deaths. New participants already dead when first observed form a baseline rather than a fabricated earlier death.
 
 ## Syncing past runs
 
@@ -47,12 +49,23 @@ Automatic completion requires **all configured required bosses plus 100% enemy f
 
 Reset/resume and boss-confirmed wing tracking preserve consistent saved state. Completed sessions do not restart merely because of another zone notification or reload; use `/fplus reset` to restart intentionally.
 
+### Visible kill tracking and boss reports
+
+When CLEU is unavailable, the addon can establish credit from a living, attackable creature in combat with readable party/pet threat or the creature targeting a party member, and a readable false tap-denied flag. It remembers that GUID and awards 2% on a verified visible death even if the corpse is no longer attackable. Nameplates, target, mouseover, and party targets provide visibility; disappearing alone is not a death.
+
+A corpse first seen after the kill, loot rights alone, an idle selected mob, or secret/unavailable engagement data does not establish credit. Earlier missed kills cannot be reliably reconstructed and are not invented. Saved credit and deduplication survive reload. Damage/healing still require readable combat events; this forces fallback does not manufacture combat totals.
+
+Each newly recorded required boss posts **time remaining (or overtime), current Forces %, and boss progress** to normal PARTY chat. Duplicate boss events do not repeat the report; demo/solo/raid runs do not post. Each addon instance reports its own observation; this is not cross-client announcer election. Failed public sends are not retried, to avoid duplicate chat.
+
+If forces still do not move, target a living enemy during the party fight and run `/fplus debug`; repeat after its death. The output reports readable CLEU, live credit, and which target/engagement values are available without exposing secret values.
+
 ## Commands and minimap
 
 | Command | Action |
 |---|---|
 | `/fplus` | Toggle dungeon journal |
 | `/fplus sync` | Exchange recorded runs with eligible online participants |
+| `/fplus debug` | Print kill-credit / CLEU diagnostics and target API availability |
 | `/fplus lock` | Toggle timer dragging lock |
 | `/fplus reset` | Archive the current attempt as reset and restart the timer |
 | `/fplus complete` | Force-complete and save the current real run |

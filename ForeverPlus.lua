@@ -3,7 +3,7 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.1.1"
+ns.ver = "1.1.2"
 
 local LIMIT = ns.LIMIT
 local Secret = ns.IsSecret
@@ -388,6 +388,25 @@ local function NpcIdFromGUID(guid)
     return nil
 end
 
+local function PostBossProgress(bossName, down, total)
+    if not run or run.practice or Read(IsInGroup) ~= true or Read(IsInRaid) == true then return end
+    local send = SendChatMessage or (C_ChatInfo and C_ChatInfo.SendChatMessage)
+    if type(send) ~= "function" then return end
+    local clock, overtime = ns.FormatClock(Elapsed(run), LIMIT)
+    local label = overtime and ("Overtime " .. clock) or ("Time remaining " .. clock)
+    if Secret(bossName) or type(bossName) ~= "string" then bossName = "Boss" end
+    bossName = bossName:gsub("[|%c]", "")
+    local function message(name)
+        return string.format("ForeverPlus: %s down — %s | Forces %d%% | Bosses %d/%d.",
+            name, label, ns.ForcesPercent(run), down, total)
+    end
+    local text = message(bossName)
+    if #text > 255 then text = message("Boss") end
+    -- Public reports are attempted once; retrying could duplicate party chat.
+    local ok, result = pcall(send, text, "PARTY")
+    if not ok or result == false then Print("Boss report could not be sent to party chat.") end
+end
+
 function ns.OnCreatureDead(guid, npcId, name, source)
     if not run or not run.active or run.complete then
         return
@@ -447,6 +466,7 @@ function ns.OnCreatureDead(guid, npcId, name, source)
         end
         local down, total = ns.CountBossesDown(run)
         Print(string.format("%s down. Bosses %d/%d. Forces %d%%.", boss.n or name or "Boss", down, total, ns.ForcesPercent(run)))
+        PostBossProgress(boss.n or name, down, total)
     end
 
     Persist()
@@ -455,13 +475,35 @@ function ns.OnCreatureDead(guid, npcId, name, source)
     end
 end
 
-local function ScanBossUnits()
-    if not run or not run.active or run.complete then return end
-    local units = {"boss1", "boss2", "boss3", "boss4", "boss5", "target", "focus", "mouseover"}
+local diagnostics = {cleu=0, empty=0, errors=0, liveCredits=0}
+
+local function PartyEngaged(unit)
+    -- A false tap-denied flag alone is not evidence of party participation.
+    if Read(UnitAffectingCombat, unit) ~= true or Read(UnitIsTapDenied, unit) ~= false then return false end
+    local members = {"player", "pet"}
     for i = 1, 4 do
-        units[#units + 1] = "party" .. i .. "target"
+        members[#members + 1] = "party" .. i
+        members[#members + 1] = "partypet" .. i
     end
-    if C_NamePlate and C_NamePlate.GetNamePlates then
+    for _, member in ipairs(members) do
+        if Read(UnitExists, member) == true then
+            local threat = Read(UnitThreatSituation, member, unit)
+            if Number(threat) and threat >= 0 and threat <= 3 then return true end
+            if Read(UnitIsUnit, unit .. "target", member) == true then return true end
+        end
+    end
+    return false
+end
+
+local function ScanBossUnits(extraUnit, onlyExtra)
+    if not run or not run.active or run.complete or run.practice then return end
+    local specific = not Secret(extraUnit) and type(extraUnit) == "string" and onlyExtra == true
+    local units = specific and {extraUnit} or {"boss1", "boss2", "boss3", "boss4", "boss5", "target", "focus", "mouseover"}
+    if not specific then
+        if not Secret(extraUnit) and type(extraUnit) == "string" then units[#units + 1] = extraUnit end
+        for i = 1, 4 do units[#units + 1] = "party" .. i .. "target" end
+    end
+    if not specific and C_NamePlate and C_NamePlate.GetNamePlates then
         local plates = Read(C_NamePlate.GetNamePlates)
         if type(plates) == "table" then
             for i = 1, #plates do
@@ -474,18 +516,28 @@ local function ScanBossUnits()
     for i = 1, #units do
         local u = units[i]
         if Read(UnitExists, u) == true then
-            local dead = Read(UnitIsDead, u) == true or Read(UnitIsDeadOrGhost, u) == true
-            if dead then
-                local n = Read(UnitName, u)
-                local guid = Read(UnitGUID, u)
-                local npcId = NpcIdFromGUID(guid)
-                if Read(UnitIsPlayer, u) == false and Read(UnitCanAttack, "player", u) == true then
-                    ns.OnCreatureDead(guid, npcId, n, u)
+            local dead = Read(UnitIsDead, u)
+            if type(dead) ~= "boolean" then dead = Read(UnitIsDeadOrGhost, u) end
+            local guid = Read(UnitGUID, u)
+            local npcId = NpcIdFromGUID(guid)
+            if npcId and Read(UnitIsPlayer, u) == false then
+                if dead == false and Read(UnitCanAttack, "player", u) == true
+                    and not run.killCredit[guid] and not run.killSeen[guid] and PartyEngaged(u) then
+                    -- Remember engagement while alive: corpses often stop being attackable.
+                    run.killCredit[guid] = true
+                    diagnostics.liveCredits = diagnostics.liveCredits + 1
+                    Persist()
+                elseif dead == true and (run.killCredit[guid] or Read(UnitCanAttack, "player", u) == true) then
+                    ns.OnCreatureDead(guid, npcId, Read(UnitName, u), u)
+                    if run and run.complete then return end
                 end
-                if run and run.complete then return end
             end
         end
     end
+end
+
+local function Capture(...)
+    return {n=select("#", ...), ...}
 end
 
 local f = CreateFrame("Frame")
@@ -505,6 +557,9 @@ f:RegisterEvent("PLAYER_REGEN_ENABLED")
 f:RegisterEvent("UNIT_HEALTH")
 f:RegisterEvent("UNIT_FLAGS")
 f:RegisterEvent("UNIT_PET")
+for _, event in ipairs({"NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UNIT_TARGET", "UNIT_THREAT_LIST_UPDATE", "UNIT_THREAT_SITUATION_UPDATE"}) do
+    pcall(f.RegisterEvent, f, event)
+end
 pcall(function() f:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED") end)
 pcall(function() f:RegisterEvent("ENCOUNTER_START") end)
 
@@ -535,7 +590,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 
     if event == "PLAYER_DEAD" then
         if run and run.active and not run.complete then
-            if ns.History and run.history then ns.History.Death(run,Read(UnitGUID,"player"),true)
+            if ns.History and run.history then ns.History.UnitDeath(run,"player")
             else run.deaths = (run.deaths or 0) + 1 end
             if DB().currentRun then DB().currentRun.deaths = run.deaths end
         end
@@ -544,16 +599,13 @@ f:SetScript("OnEvent", function(_, event, ...)
 
     if event == "UNIT_HEALTH" or event == "UNIT_FLAGS" then
         local unit = ...
-        -- Never query alive state from a death event: the unit API may still be stale.
-        if not Secret(unit) and type(unit) == "string" and (unit == "player" or unit:match("^party[1-4]$"))
-            and Read(UnitExists,unit) == true and Read(UnitIsDeadOrGhost,unit) == false then
-            if ns.History then ns.History.Alive(run,Read(UnitGUID,unit)) end
-        end
+        if ns.History then ns.History.UnitState(run,unit); Persist() end
+        if not Secret(unit) and type(unit) == "string" then ScanBossUnits(unit, true) end
         return
     end
 
     if event == "PLAYER_ALIVE" or event == "PLAYER_UNGHOST" then
-        if ns.History then ns.History.Alive(run,Read(UnitGUID,"player"),true) end
+        if ns.History then ns.History.UnitState(run,"player",true); Persist() end
         return
     end
 
@@ -576,6 +628,16 @@ f:SetScript("OnEvent", function(_, event, ...)
         return
     end
 
+    if event == "NAME_PLATE_UNIT_ADDED" or event == "NAME_PLATE_UNIT_REMOVED" or event == "UNIT_TARGET"
+        or event == "UNIT_THREAT_LIST_UPDATE" or event == "UNIT_THREAT_SITUATION_UPDATE" then
+        local unit = ...
+        if not Secret(unit) and type(unit) == "string" then
+            ScanBossUnits(unit, true)
+            if event == "UNIT_TARGET" then ScanBossUnits(unit == "player" and "target" or (unit .. "target"), true) end
+        end
+        return
+    end
+
     if event == "UNIT_PET" then
         if ns.History then ns.History.Roster(run,true); Persist() end
         return
@@ -589,13 +651,19 @@ f:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "COMBAT_LOG_EVENT_UNFILTERED" then
-        local result = {pcall(CombatLogGetCurrentEventInfo)}
-        local ok = table.remove(result,1)
+        local raw = Capture(pcall(CombatLogGetCurrentEventInfo))
+        local ok = raw[1]
+        -- CLEU contains nil holes. Never use # or table.remove to shift this tuple.
+        local result = {n=raw.n - 1}
+        for i = 2, raw.n do result[i - 1] = raw[i] end
+        if not ok then diagnostics.errors = diagnostics.errors + 1
+        elseif not Secret(result[2]) and type(result[2]) == "string" then diagnostics.cleu = diagnostics.cleu + 1
+        else diagnostics.empty = diagnostics.empty + 1 end
         if ns.History and run and run.history then
             if ok then ns.History.Observe(run,result) else run.history.coverage="partial" end
             Persist()
         end
-        local timestamp, subevent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags = unpack(result)
+        local timestamp, subevent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags = unpack(result, 1, 11)
         if not ok or Secret(subevent) or Secret(sourceFlags) or Secret(destFlags) then return end
         if run and run.active and not run.practice and NpcIdFromGUID(destGUID) and type(sourceFlags) == "number" and type(destFlags) == "number" and bit and bit.band then
             local group = bit.band(sourceFlags, 7) ~= 0
@@ -614,8 +682,14 @@ f:SetScript("OnEvent", function(_, event, ...)
 end)
 
 -- Smooth timer; also re-scan boss frames in case combat log is locked down.
+local partyScanAt = 0
 C_Timer.NewTicker(0.1, function()
     if run and run.active and not run.complete then
+        if ns.History and GetTime() >= partyScanAt then
+            partyScanAt = GetTime() + 0.5
+            for _, unit in ipairs({"player", "party1", "party2", "party3", "party4"}) do ns.History.UnitState(run, unit) end
+            Persist()
+        end
         ScanBossUnits()
     end
     if ns.UI then ns.UI.Tick() end
@@ -726,9 +800,29 @@ SlashCmdList.FOREVERPLUS = function(msg)
         ns.ToggleDemo()
         return
     end
+    if msg == "debug" then
+        local history = ns.History and run and run.history
+        Print(string.format("v%s | Forces %d%% (%d kills) | CLEU readable %d, empty/restricted %d, errors %d | live credits %d (session) | tracked players %d, party deaths %d.",
+            ns.ver, ns.ForcesPercent(run), run and run.kills or 0, diagnostics.cleu, diagnostics.empty, diagnostics.errors, diagnostics.liveCredits,
+            history and #history.players or 0, history and ns.History.TotalDeaths(run) or 0))
+        local function flag(v)
+            if v == true then return "yes" elseif v == false then return "no" end
+            return "unavailable"
+        end
+        local guid = Read(UnitGUID, "target")
+        local creature = NpcIdFromGUID(guid)
+        local credited = creature and run and run.killCredit and run.killCredit[guid] == true or false
+        Print("Target: creature GUID=" .. (creature and "readable" or "unavailable")
+            .. ", dead=" .. flag(Read(UnitIsDeadOrGhost, "target"))
+            .. ", attackable=" .. flag(Read(UnitCanAttack, "player", "target"))
+            .. ", in combat=" .. flag(Read(UnitAffectingCombat, "target"))
+            .. ", tap denied=" .. flag(Read(UnitIsTapDenied, "target"))
+            .. ", party engagement=" .. flag(PartyEngaged("target")) .. ", saved credit=" .. flag(credited))
+        return
+    end
     if msg == "help" then
-        Print("/fplus — open best-times board")
-        Print("/fplus lock | reset | complete | abandon | times | share | sync | demo")
+        Print("/fplus — open dungeon journal")
+        Print("/fplus lock | reset | complete | abandon | times | share | sync | demo | debug")
         return
     end
     Print("Unknown command. /fplus help")

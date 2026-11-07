@@ -119,3 +119,48 @@ ns.ToggleDemo();advance(1)
 assert(ns.GetRun()==nil)
 assert(ForeverPlusFrame.deaths.text=='Deaths: 0')
 print('PASS full TOC load, login, dungeon clear, no in-instance sends, queued share, demo isolation')
+-- Real module wiring with no CLEU payload: live party threat -> unattackable corpse.
+kind,dungeonName,instanceID='party','Blackfathom Deeps',48
+fire('PLAYER_ENTERING_WORLD');advance(1)
+local mob={dead=false,guid='Creature-0-0-0-0-4824-1'}
+local oldExists,oldGUID,oldPlayer=UnitExists,UnitGUID,UnitIsPlayer
+UnitExists=function(u) return u=='target' or oldExists(u) end
+UnitGUID=function(u) if u=='target' then return mob.guid end;return oldGUID(u) end
+UnitIsPlayer=function(u) if u=='target' then return false end;return oldPlayer(u) end
+UnitIsDead=function(u) return u=='target' and mob.dead or false end
+UnitIsDeadOrGhost=UnitIsDead
+UnitCanAttack=function(_,u) return u=='target' and not mob.dead end
+UnitAffectingCombat=function(u) return u=='target' and not mob.dead end
+UnitIsTapDenied=function() return false end
+UnitThreatSituation=function(member,u) if member=='party1' and u=='target' and not mob.dead then return 2 end end
+CombatLogGetCurrentEventInfo=function() end
+fire('COMBAT_LOG_EVENT_UNFILTERED')
+fire('UNIT_HEALTH','target');mob.dead=true;fire('UNIT_HEALTH','target')
+assert(ns.ForcesPercent(ns.GetRun())==2,'closed CLEU visible kill did not count in integrated addon')
+fire('UNIT_FLAGS','target');assert(ns.GetRun().kills==1,'duplicate corpse counted')
+local reports={}
+C_ChatInfo.SendChatMessage=function(msg,ch) reports[#reports+1]={msg=msg,ch=ch} end
+fire('BOSS_KILL',0,'Ghamoo-ra');fire('ENCOUNTER_END',0,'Ghamoo-ra',1,5,1)
+assert(#reports==1 and reports[1].ch=='PARTY' and reports[1].msg:find('Forces 2%',1,true),'boss party report missing or duplicated')
+print('PASS full addon closed-CLEU visible forces fallback and one boss progress party report')
+local oldDead=UnitIsDeadOrGhost
+local friendDead=false
+UnitIsDeadOrGhost=function(u) if u=='party1' then return friendDead end;return oldDead(u) end
+friendDead=true;fire('UNIT_HEALTH','party1')
+local partyRun=ns.GetRun()
+local function friendDeaths()
+ for _,p in ipairs(partyRun.history.players) do if p.name=='Friend-Realm' then return p.deaths end end
+end
+assert(friendDeaths()==1,'dead party member was not counted without CLEU')
+assert(partyRun.deaths==0,'teammate death changed legacy local death counter')
+ns.UI.Show();ns.UI.Tick();assert(ForeverPlusFrame.deaths.text=='Deaths: 1','HUD did not show party deaths')
+fire('UNIT_FLAGS','party1');advance(1);assert(friendDeaths()==1,'duplicate party death counted')
+friendDead=false;fire('UNIT_FLAGS','party1')
+friendDead=true;fire('UNIT_HEALTH','party1');assert(friendDeaths()==2,'second party death after resurrection was not counted')
+ns.CompleteRun('manual','manual');local archived=ns.History.List('bfd')
+assert(#archived==1,'BFD run history missing')
+local archivedDeaths=0;for _,p in ipairs(archived[1].players) do archivedDeaths=archivedDeaths+p.deaths end
+assert(archivedDeaths==2,'party deaths were not archived')
+friendDead=false;fire('UNIT_FLAGS','party1');friendDead=true;fire('UNIT_HEALTH','party1')
+assert(ns.History.TotalDeaths(partyRun)==2,'completed party deaths changed')
+print('PASS closed-CLEU teammate deaths, party HUD total, resurrection, archival and completed freeze')

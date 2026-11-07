@@ -32,6 +32,12 @@ ns.UI.Init();ns.UI.Show();ns.UI.ToggleBoard();ns.UI.RefreshBoard()
 run={key='rfc',name='Ragefire Chasm',active=true,deaths=7,kills=20,dungeon=ns.DUNGEONS.rfc,bossDown={}}
 ns.UI.Tick()
 assert(ForeverPlusFrame.deaths.text=='Deaths: 7')
+local historyNS={};assert(loadfile('History.lua'))('ForeverPlus',historyNS)
+ns.History=historyNS.History
+run.history={players={{deaths=0},{deaths=1}}};run.deaths=0;ns.UI.Tick()
+assert(ForeverPlusFrame.deaths.text=='Deaths: 1','HUD must show party total rather than legacy local deaths')
+assert(run.deaths==0,'HUD must not mutate local counter')
+ns.History=nil
 run=nil;ns.UI.Tick()
 assert(ForeverPlusFrame.deaths.text=='Deaths: 0','idle deaths were not cleared')
 assert(ForeverPlusFrame.obj.text=='Bosses 0/0     Forces 0%','idle objectives were not cleared')
