@@ -169,7 +169,7 @@ function UI.Init()
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
         GameTooltip:AddLine("ForeverPlus", 1, 0.82, 0.2)
         GameTooltip:AddLine("Gag Mythic+ timer. All standard bosses + 50 mobs (2% each).", 1, 1, 1, true)
-        GameTooltip:AddLine("Drag to move. Right-click for best times.", 0.7, 0.7, 0.7, true)
+        GameTooltip:AddLine("Drag to move. Right-click for dungeon history.", 0.7, 0.7, 0.7, true)
         GameTooltip:AddLine("/fplus complete to force-end if a kill isn't seen.", 0.7, 0.7, 0.7, true)
         GameTooltip:Show()
     end)
@@ -179,139 +179,277 @@ function UI.Init()
     UI.BuildMinimap()
 end
 
+local function SafeText(value)
+    if (ns.IsSecret and ns.IsSecret(value)) or type(value) ~= "string" then return "" end
+    return value:gsub("|", ""):gsub("[%z\1-\31\127]", " ")
+end
+local function ShortNumber(value)
+    if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge then return "—" end
+    if value >= 1000000000 then return string.format("%.2fb", value / 1000000000) end
+    if value >= 1000000 then return string.format("%.2fm", value / 1000000) end
+    if value >= 1000 then return string.format("%.1fk", value / 1000) end
+    return string.format("%.0f", value)
+end
+local function Stamp(value)
+    if date and type(value) == "number" then
+        local ok, result = pcall(date, "%m/%d/%y %H:%M", value)
+        if ok then return SafeText(result) end
+    end
+    return type(value) == "number" and tostring(value) or "Unknown date"
+end
+local function Text(parent, x, y, width, font)
+    local label = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
+    label:SetPoint("TOPLEFT", x, y)
+    label:SetWidth(width)
+    label:SetJustifyH("LEFT")
+    return label
+end
+local function PanelScroll(parent, name, x, y, width, height)
+    local scroll = CreateFrame("ScrollFrame", name, parent, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", x, y)
+    scroll:SetSize(width, height)
+    local child = CreateFrame("Frame", nil, scroll)
+    child:SetSize(width, height)
+    scroll:SetScrollChild(child)
+    return child, scroll
+end
+local function Selectable(parent, width, height, index)
+    local row = CreateFrame("Button", nil, parent)
+    row:SetSize(width, height)
+    row:SetPoint("TOPLEFT", 0, -(index - 1) * height)
+    row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
+    row.selected = row:CreateTexture(nil, "BACKGROUND")
+    row.selected:SetAllPoints()
+    row.selected:SetColorTexture(0.85, 0.65, 0.18, 0.16)
+    row.selected:Hide()
+    return row
+end
+local function SyncRuns()
+    if ns.Sync and ns.Sync.Request then ns.Sync.Request("manual") end
+    UI.RefreshBoard()
+end
+
 function UI.BuildBoard()
     board = CreateFrame("Frame", "ForeverPlusBoard", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
-    board:SetSize(420, 460)
-    board:SetPoint("CENTER", UIParent, "CENTER", 180, 0)
+    board:SetSize(940, 560)
+    board:SetPoint("CENTER", UIParent, "CENTER", 0, -20)
     board:SetMovable(true)
     board:EnableMouse(true)
+    board:SetClampedToScreen(true)
     board:RegisterForDrag("LeftButton")
     board:SetScript("OnDragStart", function(self) self:StartMoving() end)
     board:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     board:SetFrameStrata("DIALOG")
+    local width = UIParent.GetWidth and UIParent:GetWidth()
+    local height = UIParent.GetHeight and UIParent:GetHeight()
+    if type(width) == "number" and type(height) == "number" then
+        board:SetScale(math.min(1, math.max(0.4, (width - 30) / 940), math.max(0.4, (height - 30) / 560)))
+    end
     board:Hide()
-    MakeBackdrop(board, 0.03, 0.03, 0.06, 0.96)
-
-    local t = board:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    t:SetPoint("TOP", 0, -12)
-    t:SetText("ForeverPlus  ·  Best Clears")
-
-    local sub = board:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    sub:SetPoint("TOP", t, "BOTTOM", 0, -4)
-    sub:SetText("Your times vs anyone else with the addon (party/guild)")
-    board.sub = sub
-
+    MakeBackdrop(board, 0.03, 0.03, 0.06, 0.98)
+    Text(board, 16, -14, 850, "GameFontNormalLarge"):SetText("ForeverPlus  ·  Dungeon Journal")
+    Text(board, 16, -38, 880):SetText("Choose a dungeon, then a run. Recorded group stats · participant-only sync outside instances.")
     local close = CreateFrame("Button", nil, board, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", 2, 2)
 
-    local scroll = CreateFrame("ScrollFrame", "ForeverPlusBoardScroll", board, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", 12, -48)
-    scroll:SetPoint("BOTTOMRIGHT", -32, 40)
-    local child = CreateFrame("Frame", nil, scroll)
-    child:SetSize(360, 800)
-    scroll:SetScrollChild(child)
-    board.child = child
-    board.lines = {}
-
-    local share = CreateFrame("Button", nil, board, "UIPanelButtonTemplate")
-    share:SetSize(120, 22)
-    share:SetPoint("BOTTOMLEFT", 16, 12)
-    share:SetText("Share times")
-    share:SetScript("OnClick", function()
-        if ns.Comm then ns.Comm.ShareNow("button") end
-    end)
-
-    local hint = board:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    hint:SetPoint("LEFT", share, "RIGHT", 10, 0)
-    hint:SetText("Shares when you are not inside a dungeon")
-end
-
-local function EnsureLine(i)
-    local child = board.child
-    local line = board.lines[i]
-    if line then return line end
-    line = CreateFrame("Frame", nil, child)
-    line:SetSize(360, 18)
-    line:SetPoint("TOPLEFT", 0, -((i - 1) * 18))
-    line.left = line:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    line.left:SetPoint("LEFT", 0, 0)
-    line.left:SetWidth(190)
-    line.left:SetJustifyH("LEFT")
-    line.mid = line:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    line.mid:SetPoint("LEFT", 194, 0)
-    line.mid:SetWidth(70)
-    line.right = line:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    line.right:SetPoint("LEFT", 266, 0)
-    line.right:SetWidth(90)
-    board.lines[i] = line
-    return line
-end
-
-local function OrderedKeys()
-    local list = {}
-    for key, d in pairs(ns.DUNGEONS) do
-        list[#list + 1] = { key = key, name = d.name }
+    Text(board, 16, -68, 200, "GameFontNormal"):SetText("DUNGEONS")
+    Text(board, 240, -68, 210, "GameFontNormal"):SetText("RUN HISTORY")
+    Text(board, 480, -68, 420, "GameFontNormal"):SetText("RUN DETAILS")
+    board.dungeonChild, board.dungeonScroll = PanelScroll(board, "ForeverPlusDungeonScroll", 16, -94, 192, 410)
+    board.runChild, board.runScroll = PanelScroll(board, "ForeverPlusRunScroll", 240, -94, 206, 410)
+    board.dungeonLines, board.runLines, board.playerLines = {}, {}, {}
+    board.detailTitle = Text(board, 480, -96, 430, "GameFontNormalLarge")
+    board.detailSummary = Text(board, 480, -122, 430)
+    board.detailSummary:SetHeight(46)
+    board.coverage = Text(board, 480, -174, 430)
+    board.coverage:SetHeight(34)
+    board.source = Text(board, 480, -212, 430, "GameFontDisableSmall")
+    board.source:SetHeight(32)
+    local headers = {{"Player / realm", 0, 158}, {"Damage", 163, 83}, {"Healing", 252, 83}, {"Deaths", 342, 70}}
+    for _, col in ipairs(headers) do Text(board, 480 + col[2], -252, col[3], "GameFontNormal"):SetText(col[1]) end
+    for i = 1, 10 do
+        local row = CreateFrame("Frame", nil, board)
+        row:SetPoint("TOPLEFT", 480, -278 - (i - 1) * 21)
+        row:SetSize(430, 21)
+        row.name = Text(row, 0, 0, 158)
+        row.damage = Text(row, 163, 0, 83)
+        row.healing = Text(row, 252, 0, 83)
+        row.deaths = Text(row, 342, 0, 70)
+        row:Hide()
+        board.playerLines[i] = row
     end
+    board.totals = Text(board, 480, -494, 430, "GameFontNormal")
+    local sync = CreateFrame("Button", nil, board, "UIPanelButtonTemplate")
+    sync:SetSize(130, 24)
+    sync:SetPoint("BOTTOMLEFT", 16, 14)
+    sync:SetText("Sync runs")
+    sync:SetScript("OnClick", SyncRuns)
+    board.syncButton = sync
+    board.syncStatus = Text(board, 158, -526, 750, "GameFontDisableSmall")
+end
+
+local function AllDungeons()
+    local byKey, counts = {}, {}
+    for key, d in pairs(ns.DUNGEONS) do byKey[key] = d.name end
+    local history = ns.History and ns.History.List and ns.History.List() or {}
+    for _, r in ipairs(history) do
+        byKey[r.dungeonKey] = byKey[r.dungeonKey] or r.dungeonName
+        counts[r.dungeonKey] = (counts[r.dungeonKey] or 0) + 1
+    end
+    for key, b in pairs(DB().best) do byKey[key] = byKey[key] or b.name or key end
+    local list = {}
+    for key, name in pairs(byKey) do list[#list + 1] = {key=key, name=name, count=counts[key] or 0} end
     table.sort(list, function(a, b) return a.name < b.name end)
+    table.insert(list, 1, {key="*", name="All dungeons", count=#history})
     return list
+end
+
+function UI.SelectDungeon(key)
+    if not board then UI.Init() end
+    board.selectedDungeon = key
+    board.selectedRun = nil
+    board.runScroll:SetVerticalScroll(0)
+    UI.RefreshBoard()
+end
+function UI.SelectRun(id)
+    if not board then return end
+    for _, r in ipairs(board.visibleRuns or {}) do
+        if r.id == id then board.selectedRun = id; UI.RefreshBoard(); return end
+    end
 end
 
 function UI.RefreshBoard()
     if not board then return end
-    local i = 0
-    local function add(name, you, peer)
-        i = i + 1
-        local line = EnsureLine(i)
-        line:Show()
-        line.left:SetText(name)
-        line.mid:SetText(you or "—")
-        line.right:SetText(peer or "")
-    end
-
-    -- Peer summary: best time among known peers for that key
-    local function peerBest(key)
-        local bestSec, bestWho
-        local peers = DB().peers
-        for who, times in pairs(peers) do
-            local e = times[key]
-            if e and e.sec and (not bestSec or e.sec < bestSec) then
-                bestSec = e.sec
-                bestWho = who
-            end
+    local dungeons = AllDungeons()
+    board.selectedDungeon = board.selectedDungeon or "*"
+    local dungeonExists = false
+    for i, d in ipairs(dungeons) do
+        if d.key == board.selectedDungeon then dungeonExists = true end
+        local row = board.dungeonLines[i]
+        if not row then
+            row = Selectable(board.dungeonChild, 192, 36, i)
+            row.title = Text(row, 3, -2, 185)
+            row.title:SetHeight(18)
+            row.count = Text(row, 3, -20, 185, "GameFontDisableSmall")
+            row:SetScript("OnClick", function(self) UI.SelectDungeon(self.key) end)
+            row:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:AddLine(SafeText(self.fullName), 1, 0.82, 0.2)
+                GameTooltip:Show()
+            end)
+            row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            board.dungeonLines[i] = row
         end
-        if not bestSec then return nil end
-        local short = bestWho:match("([^%-]+)") or bestWho
-        return string.format("%s %s", ns.FormatTime(bestSec), short)
+        row.key, row.fullName = d.key, d.name
+        row.title:SetText(SafeText(d.name))
+        row.count:SetText(string.format("%d recorded run%s", d.count, d.count == 1 and "" or "s"))
+        if d.key == board.selectedDungeon then row.selected:Show() else row.selected:Hide() end
+        row:Show()
     end
-
-    local keys = OrderedKeys()
-    for n = 1, #keys do
-        local key = keys[n].key
-        local d = ns.DUNGEONS[key]
-        local b = ns.GetBest(key)
-        local you = b and (ns.FormatTime(b.sec) .. " +" .. tostring(b.chest or 0)) or nil
-        add(d.name, you, peerBest(key))
-    end
-    -- also unknown keys stored in best
-    for key, b in pairs(DB().best) do
-        if not ns.DUNGEONS[key] then
-            add(b.name or key, ns.FormatTime(b.sec) .. " +" .. tostring(b.chest or 0), peerBest(key))
+    for i = #dungeons + 1, #board.dungeonLines do board.dungeonLines[i]:Hide() end
+    board.dungeonChild:SetHeight(math.max(410, #dungeons * 36))
+    if not dungeonExists then board.selectedDungeon = "*"; board.selectedRun = nil end
+    local key = board.selectedDungeon ~= "*" and board.selectedDungeon or nil
+    local runs = ns.History and ns.History.List and ns.History.List(key) or {}
+    board.visibleRuns = runs
+    local selected
+    for i, r in ipairs(runs) do
+        local row = board.runLines[i]
+        if not row then
+            row = Selectable(board.runChild, 206, 48, i)
+            row.title = Text(row, 3, -3, 200)
+            row.title:SetHeight(20)
+            row.sub = Text(row, 3, -26, 200, "GameFontDisableSmall")
+            row:SetScript("OnClick", function(self) UI.SelectRun(self.id) end)
+            board.runLines[i] = row
         end
+        row.id = r.id
+        local state = r.status == "completed" and ((r.chest or 0) > 0 and ("+" .. r.chest) or "Depleted") or SafeText(r.status)
+        row.title:SetText(ns.FormatTime(r.sec) .. "   " .. state .. (r.manual and " · manual" or ""))
+        row.sub:SetText(Stamp(r.endUnix))
+        row:Show()
+        if r.id == board.selectedRun then selected = r end
     end
-    for j = i + 1, #(board.lines) do
-        board.lines[j]:Hide()
+    for i = #runs + 1, #board.runLines do board.runLines[i]:Hide() end
+    board.runChild:SetHeight(math.max(410, #runs * 48))
+    if not selected then selected = runs[1]; board.selectedRun = selected and selected.id or nil end
+    for _, row in ipairs(board.runLines) do
+        if row.id == board.selectedRun then row.selected:Show() else row.selected:Hide() end
     end
-    board.child:SetHeight(math.max(400, i * 18 + 8))
+    if #runs == 0 then
+        if not board.empty then
+            board.empty = Text(board.runChild, 4, -8, 194, "GameFontDisableSmall")
+            board.empty:SetHeight(160)
+        end
+        board.empty:SetText("No recorded runs yet.\n\nNew runs record the group and observed combat stats.\n\nOlder best times do not contain recoverable run details.")
+        board.empty:Show()
+    elseif board.empty then board.empty:Hide() end
+    for _, row in ipairs(board.playerLines) do row:Hide() end
+    if selected then
+        board.detailTitle:SetText(SafeText(selected.dungeonName))
+        local state = selected.status == "completed" and "Completed" or SafeText(selected.status)
+        board.detailSummary:SetText(Stamp(selected.endUnix) .. "\n" .. ns.FormatTime(selected.sec) .. " · " .. state .. (selected.manual and " · manual finish" or ""))
+        local coverage = {observed="Observed combat stats (client-visible events)", partial="Partial stats — some events were unavailable", unavailable="Damage / healing unavailable — no usable combat events"}
+        board.coverage:SetText(coverage[selected.coverage] or coverage.unavailable)
+        board.source:SetText("Recorded by " .. SafeText(selected.recordedBy) .. " · shared stats are unverified")
+        local damage, healing, deaths = 0, 0, 0
+        for i, p in ipairs(selected.players or {}) do
+            local row = board.playerLines[i]
+            if not row then break end
+            row.name:SetText(SafeText(p.name))
+            local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[p.class]
+            row.name:SetTextColor(color and color.r or 1, color and color.g or 1, color and color.b or 1)
+            row.damage:SetText(selected.coverage == "unavailable" and "—" or ShortNumber(p.damage))
+            row.healing:SetText(selected.coverage == "unavailable" and "—" or ShortNumber(p.healing))
+            row.deaths:SetText(tostring(p.deaths or 0))
+            row:Show()
+            damage, healing, deaths = damage + (p.damage or 0), healing + (p.healing or 0), deaths + (p.deaths or 0)
+        end
+        board.totals:SetText("Group: " .. (selected.coverage == "unavailable" and "— dmg / — heal" or (ShortNumber(damage) .. " dmg / " .. ShortNumber(healing) .. " heal")) .. " / " .. deaths .. " deaths")
+    else
+        board.detailTitle:SetText("Select a run")
+        local best = key and ns.GetBest(key)
+        board.detailSummary:SetText(best and ("Existing personal best: " .. ns.FormatTime(best.sec) .. "\nNo historic roster or combat stats available.") or "Select a dungeon to browse its recorded runs.")
+        board.coverage:SetText("")
+        board.source:SetText("")
+        board.totals:SetText("")
+    end
+    board.syncStatus:SetText(SafeText(ns.Sync and ns.Sync.Status and ns.Sync.Status() or "Sync available outside instances · /fplus sync"))
 end
 
 function UI.ToggleBoard()
     if not board then UI.Init() end
-    if board:IsShown() then
-        board:Hide()
-    else
-        UI.RefreshBoard()
-        board:Show()
+    if board:IsShown() then board:Hide()
+    else UI.RefreshBoard(); board:Show() end
+end
+
+function UI.ToggleMinimapMenu(anchor)
+    local menu = UI.minimapMenu
+    if not menu then
+        menu = CreateFrame("Frame", "ForeverPlusMinimapMenu", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+        menu:SetSize(190, 142)
+        menu:SetFrameStrata("TOOLTIP")
+        menu:SetClampedToScreen(true)
+        MakeBackdrop(menu, 0.03, 0.03, 0.06, 0.99)
+        local function item(text, index, fn)
+            local button = CreateFrame("Button", nil, menu, "UIPanelButtonTemplate")
+            button:SetSize(170, 24)
+            button:SetPoint("TOPLEFT", 10, -10 - (index - 1) * 30)
+            button:SetText(text)
+            button:SetScript("OnClick", function() menu:Hide(); fn() end)
+            return button
+        end
+        item("Dungeon history", 1, function() if not board:IsShown() then UI.ToggleBoard() end end)
+        menu.syncButton = item("Sync runs", 2, SyncRuns)
+        menu.lockButton = item("Lock / unlock timer", 3, function() DB().locked = not DB().locked end)
+        item("Close", 4, function() end)
+        menu:Hide()
+        UI.minimapMenu = menu
     end
+    if menu:IsShown() then menu:Hide(); return end
+    menu:ClearAllPoints()
+    menu:SetPoint("TOPRIGHT", anchor or minimap or UIParent, "BOTTOMRIGHT", 0, -2)
+    menu:Show()
 end
 
 function UI.BuildMinimap()
@@ -340,9 +478,9 @@ function UI.BuildMinimap()
         end)
     end)
     btn:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
-    btn:SetScript("OnClick", function(_, button)
+    btn:SetScript("OnClick", function(self, button)
         if button == "RightButton" then
-            UI.ToggleBoard()
+            UI.ToggleMinimapMenu(self)
         else
             if frame:IsShown() then frame:Hide() else UI.Show() end
         end
@@ -350,7 +488,7 @@ function UI.BuildMinimap()
     btn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:AddLine("ForeverPlus", 1, 0.82, 0.2)
-        GameTooltip:AddLine("Left-click: timer  Right-click: times", 1, 1, 1)
+        GameTooltip:AddLine("Left-click: timer  Right-click: history / sync menu", 1, 1, 1)
         GameTooltip:Show()
     end)
     btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -389,6 +527,9 @@ function UI.OnComplete(run)
 end
 
 function UI.Tick()
+    if board and board:IsShown() and ns.Sync and ns.Sync.Status then
+        board.syncStatus:SetText(SafeText(ns.Sync.Status()))
+    end
     if not frame then return end
     if hideAt > 0 and GetTime() > hideAt and (not ns.GetRun() or not ns.GetRun().active) then
         frame:Hide()

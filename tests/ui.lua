@@ -3,7 +3,7 @@ local ns, methods = {}, {}
 local function obj(name)
  local o={shown=true,width=140,text='',scripts={}}
  if name then _G[name]=o end
- return setmetatable(o,{__index=function(_,k) return methods[k] or function() end end})
+ return setmetatable(o,{__index=function(_,k) if methods[k] then return methods[k] end;if k:match('^[A-Z]') then return function() end end end})
 end
 methods.CreateTexture=function() return obj() end
 methods.CreateFontString=function() return obj() end
@@ -43,3 +43,41 @@ ns.UI.Tick()
 assert(ForeverPlusFrame.obj.text:find('manual',1,true),'manual roster needs explicit HUD label')
 print('PASS unverified roster is labeled manual')
 print('UI tests passed (mock API, not client rendering)')
+local records={
+ {id='r1',dungeonKey='rfc',dungeonName='Ragefire Chasm',startUnix=1000,endUnix=1300,sec=300,chest=3,status='completed',manual=false,recordedBy='Tester-Realm',coverage='observed',players={{name='Tester-Realm',class='DRUID',damage=12345,healing=5000,deaths=2},{name='Friend-Realm',class='MAGE',damage=20000,healing=0,deaths=1}}},
+ {id='r2',dungeonKey='dm',dungeonName='The Deadmines',startUnix=2000,endUnix=2600,sec=600,chest=3,status='abandoned',manual=false,recordedBy='Friend-Realm',coverage='partial',players={{name='Friend-Realm',class='MAGE',damage=1000,healing=0,deaths=0}}}
+}
+ns.History={List=function(key) local out={};for _,r in ipairs(records) do if not key or r.dungeonKey==key then out[#out+1]=r end end;return out end,Get=function(id) for _,r in ipairs(records) do if r.id==id then return r end end end}
+local syncs=0
+local syncStatus='Ready'
+ns.Sync={Request=function() syncs=syncs+1 end,Status=function() return syncStatus end}
+assert(type(ns.UI.SelectDungeon)=='function','missing dungeon selection API')
+ns.UI.SelectDungeon('rfc')
+assert(ForeverPlusBoard.selectedDungeon=='rfc')
+assert(#ForeverPlusBoard.visibleRuns==1 and ForeverPlusBoard.visibleRuns[1].id=='r1','dungeon filter failed')
+ns.UI.SelectRun('r1')
+assert(ForeverPlusBoard.playerLines[1].name.text=='Tester-Realm')
+assert(ForeverPlusBoard.playerLines[1].deaths.text=='2')
+assert(ForeverPlusBoard.playerLines[1].damage.text:find('12.3',1,true))
+ForeverPlusBoard.syncButton.scripts.OnClick()
+assert(syncs==1,'board sync action missing')
+ForeverPlusMinimapButton.scripts.OnClick(nil,'RightButton')
+assert(ForeverPlusMinimapMenu:IsShown(),'right click did not open menu')
+ForeverPlusMinimapMenu.syncButton.scripts.OnClick()
+assert(syncs==2,'minimap sync action missing')
+ns.UI.SelectDungeon('dm')
+assert(ForeverPlusBoard.selectedRun=='r2')
+assert(ForeverPlusBoard.coverage.text:find('Partial',1,true))
+records[2].players[1].name='Bad|Ttexture:99|tName'
+ns.UI.RefreshBoard()
+assert(not ForeverPlusBoard.playerLines[1].name.text:find('|',1,true),'unsafe WoW text markup')
+ns.UI.SelectDungeon('shapers')
+assert(ForeverPlusBoard.selectedRun==nil,'empty dungeon retained previous selection')
+assert(not ForeverPlusBoard.playerLines[1].shown,'empty dungeon retained player rows')
+print('PASS dungeon and run selection, participant stats, sync actions, empty state and safe text')
+if not ForeverPlusBoard:IsShown() then ns.UI.ToggleBoard() end
+ns.UI.HideNow()
+syncStatus='Sync idle.'
+ns.UI.Tick()
+assert(ForeverPlusBoard.syncStatus.text=='Sync idle.','sync status does not refresh when timer is hidden')
+print('PASS journal sync status updates while timer is hidden')

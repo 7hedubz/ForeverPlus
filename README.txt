@@ -1,42 +1,52 @@
-ForeverPlus 1.0.1 — WoW Forever gag Mythic+ timer
-================================================
+ForeverPlus 1.1.0 — WoW Forever dungeon timer and run journal
+============================================================
 Interface 16001 / Camelot. Install in _forever_/Interface/AddOns/ForeverPlus.
-Existing install: /reload. New install: fully quit and relaunch the client.
+FULLY QUIT AND RELAUNCH for this upgrade: new Lua files and TOC entries added.
 
-COMPLETION
-- One-hour timer. +3 through 36:00, +2 through 48:00, +1 through 60:00.
-- Overtime continues and depleted completions still save a time.
-- Every configured required boss PLUS 100% forces is required for auto-completion.
-- Each credited hostile creature kill = 2% (50 kills). Boss kills may count too.
-- Stable creature GUIDs and party/pet kill credit are required. Unrelated deaths,
-  players, friendly pets, and repeated scans do not add forces.
-- Empty/unverified rosters (Shaper's Terrace, unknown dungeons) are MANUAL ONLY.
-- If combat information is unavailable or a required kill is missed, use
-  /fplus complete. This intentionally force-completes and saves a real run.
-- Completed sessions do not restart on zone notifications or reload. Use reset
-  for an intentional restart. Practice runs never save/share demo times.
+DUNGEON JOURNAL
+/fplus opens a three-column journal: choose dungeon -> choose run -> stats.
+Each new run records date/time, elapsed duration, completion status, roster,
+observed damage/healing, and deaths. Abandoned/reset attempts have their own
+status. Demo runs never save or sync. History retains up to 500 run records.
+Old personal bests are preserved but cannot supply missing historical stats.
+
+STATS
+Damage excludes overkill; healing excludes overhealing. Known pets attribute
+to owners. Group members do not need the addon to appear in your recording.
+Coverage is labeled Observed / Partial / Unavailable. Client restrictions and
+range can limit data; unavailable damage/healing displays as a dash.
+
+SYNC
+/fplus sync, journal Sync runs button, or right-click minimap -> Sync runs.
+If a friend participated before installing the addon, sync after they install
+this version. Both characters must be online, outside instances, grouped or
+in the same guild. Either can initiate. Sync exchanges eligible past runs and
+deduplicates observations rather than adding their totals together.
+Requests inside instances wait until outside. No offline/cloud sync.
+Only recorded participants import/display a run. Group/guild addon payloads
+are logically addressed, NOT encrypted; other channel members can inspect
+traffic using other addons. Received stats remain unverified observations.
+
+TIMER
+One hour; +3 through36:00, +2 through48:00, +1 through60:00. Overtime continues.
+Auto-complete = all configured required bosses +100% forces (50 credited
+hostile creature kills at2% each). Unknown/empty rosters require manual finish.
 
 COMMANDS
-/fplus                 toggle best-times board
+/fplus                 dungeon journal
+/fplus sync            synchronize eligible participant run histories
 /fplus lock            toggle timer dragging lock
-/fplus reset           restart/reset dungeon timer and clear objectives
-/fplus complete        force-complete and save current real run
-/fplus abandon         abandon current run without saving completion
-/fplus times           print personal bests and toggle board
-/fplus share           share outside instances; queue while inside
-/fplus demo or /demo   toggle unsaved Demo Key practice timer
+/fplus reset           archive reset attempt; restart timer/objectives/stats
+/fplus complete        force-complete current real run
+/fplus abandon         archive abandoned attempt, without completion PB
+/fplus times           print personal bests and toggle journal
+/fplus share           legacy personal-best sharing
+/fplus demo or /demo   toggle unsaved practice timer
 
-UI
-Drag timer; right-click opens board. Minimap left-click toggles timer;
-right-click toggles board. Manual boss rosters are explicitly labeled.
-
-SHARING
-Party/raid/guild only, outside instances. Whole-record packets, validation,
-rate limits, retries, and bounded/expiring peer storage protect data integrity.
-Peer times are UNVERIFIED claims, separate from your personal bests. A member
-can still advertise a plausible fabricated time. Upgrade all participants.
+MINIMAP
+Left-click toggles timer. Right-click opens history / sync / lock / close menu.
 
 TESTS
-python3 tests/run.py (requires Python 3, LuaJIT, luac).
-Mocked-API tests do not validate real-client rendering or Forever's roster/API
-behavior. See README.md for details.
+python3 tests/run.py (requires Python3, LuaJIT, luac).
+Tests mock WoW APIs; real rendering and Forever API/event behavior need live
+client confirmation. See README.md for full details and limitations.

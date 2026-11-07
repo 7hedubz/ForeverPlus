@@ -6,7 +6,7 @@ local methods = {}
 local function obj(name)
  local o={shown=true,width=140,text='',scripts={},events={}}
  if name then _G[name]=o end
- return setmetatable(o,{__index=function(_,key) return methods[key] or function() end end})
+ return setmetatable(o,{__index=function(_,key) if methods[key] then return methods[key] end;if key:match('^[A-Z]') then return function() end end end})
 end
 methods.CreateTexture=function() return obj() end
 methods.CreateFontString=function() return obj() end
@@ -32,10 +32,19 @@ GetSubZoneText=function() return '' end
 GetMinimapZoneText=GetSubZoneText
 GetNormalizedRealmName=function() return 'Realm' end
 GetRealmName=GetNormalizedRealmName
-UnitName=function() return 'Tester' end
-UnitExists=function() return false end
-IsInInstance=function() return kind=='party' end
+UnitName=function(u) if u=='player' then return 'Tester' elseif u=='party1' then return 'Friend' end end
+UnitFullName=function(u) local name=UnitName(u);if name then return name,'Realm' end end
+UnitGUID=function(u) if u=='player' then return 'Player-1-Tester' elseif u=='party1' then return 'Player-1-Friend' end end
+UnitClass=function(u) if u=='player' then return 'Druid','DRUID' elseif u=='party1' then return 'Mage','MAGE' end end
+UnitExists=function(u) return u=='player' or u=='party1' end
+UnitIsDead=function() return false end
+UnitIsDeadOrGhost=UnitIsDead
+UnitIsPlayer=function(u) return u=='player' or u=='party1' end
+UnitCanAttack=function() return false end
+GetNumGroupMembers=function() return 2 end
+GetNumSubgroupMembers=function() return 1 end
 IsInGroup=function() return true end
+IsInInstance=function() return kind=='party' end
 IsInRaid=function() return false end
 IsInGuild=function() return false end
 issecretvalue=function() return false end
@@ -62,7 +71,10 @@ local function advance(seconds)
 end
 local function loadAddon()
  local ns={}
- for _,name in ipairs({'Dungeons.lua','ForeverPlus.lua','UI.lua','Comm.lua'}) do assert(loadfile(name))('ForeverPlus',ns) end
+ for line in io.lines('ForeverPlus.toc') do
+  local name=line:match('^([%w_]+%.lua)%s*$')
+  if name then assert(loadfile(name))('ForeverPlus',ns) end
+ end
  fire('ADDON_LOADED','ForeverPlus');fire('PLAYER_LOGIN');return ns
 end
 local ns=loadAddon();fire('PLAYER_ENTERING_WORLD');advance(6)
@@ -70,7 +82,7 @@ kind,dungeonName,instanceID='party','Ragefire Chasm',389
 fire('PLAYER_ENTERING_WORLD');advance(1)
 assert(ns.GetRun().active)
 local function emit(sub,guid,name)
- cleu={clock,sub,false,'Player-1','Tester',1,0,guid,name,2112,0}
+ cleu={clock,sub,false,'Player-1-Tester','Tester',1,0,guid,name,2112,0,1,'Spell',1,100,0}
  fire('COMBAT_LOG_EVENT_UNFILTERED')
 end
 for _,boss in ipairs(ns.DUNGEONS.rfc.bosses) do
@@ -84,6 +96,16 @@ for i=1,50 do
 end
 assert(ns.GetRun().complete)
 assert(ns.GetBest('rfc').sec>=60)
+local history=ns.History.List('rfc')
+assert(#history==1,'completed run was not archived')
+assert(#history[1].players==2,'non-addon friend missing from roster')
+local foundPlayer=false
+for _,p in ipairs(history[1].players) do
+ if p.name=='Tester-Realm' then assert(p.damage==5000,'observed damage not archived');foundPlayer=true end
+end
+assert(foundPlayer,'local participant missing')
+ns.UI.SelectDungeon('rfc')
+assert(ForeverPlusBoard.selectedRun==history[1].id,'journal did not select archived run')
 advance(10);assert(#sent==before,'completion broadcast inside instance')
 fire('ZONE_CHANGED_NEW_AREA');advance(1);assert(not ns.GetRun().active,'completed session restarted')
 kind,dungeonName,instanceID='none','Outside',0

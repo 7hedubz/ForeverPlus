@@ -18,6 +18,6 @@ for source in sorted(ROOT.glob("*.lua")):
         check=True, cwd=ROOT, env=env,
     )
     print(f"PARSE PASS {source.name}", flush=True)
-for name in ("core", "comm", "ui", "integration"):
+for name in ("core", "comm", "ui", "history", "sync", "integration"):
     subprocess.run(["luajit", f"tests/{name}.lua"], check=True, cwd=ROOT)
 print("All syntax and mocked-API regression suites passed.")

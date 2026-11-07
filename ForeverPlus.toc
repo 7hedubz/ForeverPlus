@@ -1,14 +1,16 @@
 ## Interface: 16001
 ## AllowLoadGameType: camelot
 ## Title: ForeverPlus
-## Notes: Gag Mythic+ timer: all required bosses plus 100% enemy forces. One hour, continuing through overtime. Compare unverified party/guild best times outside instances.
+## Notes: Dungeon timer and run journal: party roster, observed damage/healing/deaths, and participant run sync outside instances.
 ## Author: Dubz
-## Version: 1.0.1
+## Version: 1.1.0
 ## SavedVariables: ForeverPlusDB
 ## IconTexture: Interface\AddOns\ForeverPlus\Media\icon
 ## Category: Dungeons & Raids
 
 Dungeons.lua
+History.lua
 ForeverPlus.lua
 UI.lua
 Comm.lua
+RunSync.lua

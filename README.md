@@ -1,52 +1,72 @@
 # ForeverPlus
 
-Gag Mythic+ timer for **World of Warcraft: Forever**. Version **1.0.1**, Interface `16001` (Camelot).
+Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.1.0**, Interface `16001` (Camelot).
 
-Install the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Fully quit and relaunch for a new installation. An existing installation can load Lua changes with `/reload`.
+## Install / upgrade
 
-## Completion rules
+Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. **Fully quit and relaunch when upgrading to 1.1.0**, because it adds new Lua files and changes the TOC load list. Existing personal bests and settings remain separate from the new run history.
 
-- Enter a 5-man dungeon to start a **one-hour** timer.
-- Rewards: **+3 through 36:00**, **+2 through 48:00**, **+1 through 60:00**.
-- Overtime continues in red; depleted completions still record a time.
-- Automatic completion requires **every configured required boss** and **100% enemy forces**. Each eligible hostile creature death counts for **2%** (50 kills). Boss creature deaths can contribute forces too.
-- Forces require a stable creature GUID and observed party/pet kill credit. Players, friendly pets, duplicate corpse scans, and unrelated deaths do not count. If Forever withholds combat information, the tracker deliberately does not invent kill credit; use manual completion when necessary.
-- Missing or unverified boss rosters, including Shaper's Terrace and unknown dungeons, require `/fplus complete`. An empty boss list never automatically completes a run.
-- Boss-confirmed wing identification is not replaced by ambiguous entrance defaults.
-- Reset/resume preserve consistent saved progress. A completed session does not automatically restart on another zone notification or reload; use `/fplus reset` for an intentional restart.
-- Practice/demo runs never save personal bests or share demo results.
+## Dungeon journal
 
-## Commands
+Open with `/fplus`, or right-click the minimap icon and choose **Dungeon history**.
+
+1. Select a dungeon in the left column (or **All dungeons**).
+2. Select an individual run in the middle column.
+3. View date, elapsed time, completion status, recorder, stats coverage, the participant roster, and per-player **damage**, **healing**, and **deaths** on the right.
+
+New completed runs are recorded, including overtime and manually completed runs. Abandoned and reset attempts are retained with their own status rather than pretending to be completions. Demo/practice runs are never saved or synced. Run history is capped at 500 records, evicting the oldest; it is not an unlimited combat-log archive.
+
+**Old personal-best entries cannot be turned into detailed runs:** previous versions did not store the roster or combat totals. No historical stats are invented.
+
+### How combat stats work
+
+The addon snapshots group members, including members who do not have ForeverPlus, and records the combat events this client can observe. Damage excludes overkill, healing excludes overhealing, known pets are attributed to their owners, and duplicate death notifications are deduplicated. Roster changes are retained within the run's participant limit.
+
+Coverage is explicitly labeled **Observed**, **Partial**, or **Unavailable**. Observed does not mean server-certified or globally complete. If Forever restricts combat information, unavailable damage/healing is shown as a dash rather than fabricated zero totals. Range, restrictions, disconnected clients, and joining mid-run can limit what was observed.
+
+## Syncing past runs
+
+Use **`/fplus sync`**, the journal's **Sync runs** button, or **right-click minimap → Sync runs**. Archiving a new real run also queues participant sync automatically; requests made in an instance wait until outside.
+
+Example: you record a dungeon with a friend who has no addon. After they install ForeverPlus, group with them (or be online in the same guild), both outside instances, and click Sync. The participant handshake exchanges eligible recorded runs so the friend can see the shared dungeon and its recorded stats. Either participant can initiate; repeated sync is duplicate-safe.
+
+- Forever blocks addon messages inside instances. A request made there waits until outside.
+- Both characters must be online and reachable through the same supported party/raid/guild context, using this run-sync version. This is not offline mail or cross-account cloud storage.
+- The addon only exports a run to another recorded participant and only imports runs containing the receiver and sending participant. Realm-qualified names prevent matching a different realm's same-named character.
+- Transfers are chunked, bounded, paced, validated, and retried on send failures. Independent observations of the same physical run are conservatively deduplicated; overlapping observer totals are **never added together**.
+- Shared observations are **unverified**, not anti-cheat-certified. Personal bests are not rewritten by imported run history.
+- Transfers use addon group/guild channels with logical participant addressing, not encryption. Other channel members can potentially inspect network payloads with another addon even when ForeverPlus does not display/import the run for them.
+
+## Timer rules
+
+Enter a 5-man dungeon to start a one-hour timer. Rewards are **+3 through 36:00**, **+2 through 48:00**, **+1 through 60:00**. Overtime keeps counting and depleted completions still record a time.
+
+Automatic completion requires **all configured required bosses plus 100% enemy forces**: each eligible, party-credited hostile creature kill contributes 2% (50 kills). Boss creature kills may contribute forces. Empty/unverified rosters, such as Shaper's Terrace and unknown dungeons, are manual-only. If a required kill is unavailable to the client, `/fplus complete` is the explicit override.
+
+Reset/resume and boss-confirmed wing tracking preserve consistent saved state. Completed sessions do not restart merely because of another zone notification or reload; use `/fplus reset` to restart intentionally.
+
+## Commands and minimap
 
 | Command | Action |
 |---|---|
-| `/fplus` | Toggle best-times board |
+| `/fplus` | Toggle dungeon journal |
+| `/fplus sync` | Exchange recorded runs with eligible online participants |
 | `/fplus lock` | Toggle timer dragging lock |
-| `/fplus reset` | Restart/reset the current dungeon timer and clear objectives |
+| `/fplus reset` | Archive the current attempt as reset and restart the timer |
 | `/fplus complete` | Force-complete and save the current real run |
-| `/fplus abandon` | Drop the current run without saving a completion |
-| `/fplus times` | Print personal bests and toggle the board |
-| `/fplus share` | Share best times outside instances; queue while inside |
-| `/fplus demo` or `/demo` | Toggle the unsaved "Demo Key" practice timer |
+| `/fplus abandon` | Archive the active attempt as abandoned, without setting a completion PB |
+| `/fplus times` | Print personal bests and toggle journal |
+| `/fplus share` | Legacy best-time sharing outside instances |
+| `/fplus demo` or `/demo` | Toggle unsaved practice timer |
 
-## UI
-
-Drag the timer to move it. Right-click it to open the board. The minimap button toggles the timer on left-click and the board on right-click. Unknown boss rosters are labeled **manual**. Idle fields are cleared instead of showing the previous run's progress.
-
-## Sharing and trust
-
-Forever blocks addon messages inside instances. Shares are queued until outside, sent in whole-record packets, and rate-limited. Receiving is limited to validated party/raid/guild contexts and members. Incoming records are checked and peer data is bounded and expires.
-
-Peer times are **unverified claims**, not authenticated runs. Validation prevents malformed/obviously invalid data, not a group member advertising a plausible fabricated time. Manual completion and timer reset also mean this is not a competitive anti-cheat leaderboard. Your personal bests remain separate from peer records.
-
-Upgrade all participants to this version for the updated sharing behavior and fallback dungeon-key format. Failed sends remain queued for retry rather than reporting false success.
+Minimap **left-click** toggles the timer. **Right-click** opens the menu: Dungeon history, Sync runs, Lock / unlock timer, Close. Drag the timer to reposition; right-click the timer itself opens the journal.
 
 ## Tests
 
-With Python 3, LuaJIT, and `luac` installed:
+Requires Python 3, LuaJIT, and `luac`:
 
 ```sh
 python3 tests/run.py
 ```
 
-Tests execute the addon logic against mocked WoW APIs and cover run lifecycle, persistence, kill counting, boss matching, communications, and idle HUD state. They do **not** verify real-client rendering, Forever's actual boss rosters, or secret-value/API behavior in the live client. The tracker fails closed when required values are unavailable; manual completion remains available.
+Regression tests cover lifecycle/persistence, kill and boss matching, history/stat recording, participant sync, malformed packets, retry/instance restrictions, dungeon/run selection, minimap actions, and full-TOC integration. Mocked-API checks do **not** verify actual client rendering, Forever's roster, or live-client event/API availability.

@@ -3,7 +3,7 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.0.1"
+ns.ver = "1.1.0"
 
 local LIMIT = ns.LIMIT
 local Secret = ns.IsSecret
@@ -31,9 +31,11 @@ local function Print(msg)
 end
 ns.Print = Print
 
+local validatedDB
 local function DB()
     if Secret(ForeverPlusDB) or type(ForeverPlusDB) ~= "table" then ForeverPlusDB = {} end
     local d = ForeverPlusDB
+    if validatedDB == d then return d end
     for _,key in ipairs({"best", "peers", "pos", "minimap"}) do
         if Secret(d[key]) or type(d[key]) ~= "table" then d[key] = {} end
     end
@@ -78,6 +80,7 @@ local function DB()
     if Secret(d.locked) or type(d.locked) ~= "boolean" then d.locked = false end
     if Secret(d.showMinimap) or type(d.showMinimap) ~= "boolean" then d.showMinimap = true end
     if d.best then d.best.demo = nil end
+    validatedDB = d
     return d
 end
 ns.DB = DB
@@ -89,7 +92,7 @@ local function Persist()
         key=run.key, name=run.name, instanceID=run.instanceID,
         startUnix=run.startUnix, deaths=run.deaths, kills=run.kills,
         bossDown=run.bossDown, killSeen=run.killSeen, killCredit=run.killCredit,
-        confidence=run.confidence, complete=run.complete, sec=run.sec, chest=run.chest,
+        confidence=run.confidence, complete=run.complete, sec=run.sec, chest=run.chest, history=run.history,
     }
 end
 local function SameSession(a, b, inst)
@@ -122,9 +125,15 @@ end
 ns.Elapsed = Elapsed
 
 local function PlayerFull()
-    local name = Read(UnitName, "player")
+    local name, realm
+    if type(UnitFullName) == "function" then
+        local ok,a,b = pcall(UnitFullName,"player")
+        if ok and not Secret(a) and type(a)=="string" and not Secret(b) then name,realm=a,b end
+    end
+    name = name or Read(UnitName, "player")
     if type(name) ~= "string" then name = "Player" end
-    local realm = Read(GetNormalizedRealmName) or Read(GetRealmName)
+    if name:find("-",1,true) then return name end
+    if type(realm) ~= "string" or realm=="" then realm = Read(GetNormalizedRealmName) or Read(GetRealmName) end
     if type(realm) ~= "string" then realm = "" end
     realm = realm:gsub("%s+", "")
     if realm ~= "" then
@@ -167,6 +176,7 @@ function ns.StartRun(dungeon, reason)
     if run and run.active and run.key == dungeon.key then
         return run
     end
+    if run and run.active and ns.History then ns.History.Archive(run,"abandoned",false) end
     -- Leaving and re-entering a fresh instance starts a new key.
     run = {
         active = true,
@@ -187,6 +197,7 @@ function ns.StartRun(dungeon, reason)
         killSeen = {},
         killCredit = {},
     }
+    if ns.History then ns.History.Start(run) end
     Persist()
     if ns.UI then ns.UI.Show() end
     if not run.practice then
@@ -220,6 +231,7 @@ function ns.AbandonRun(reason)
         if ns.UI then ns.UI.HideSoon() end
         return
     end
+    if ns.History then ns.History.Archive(run,"abandoned",reason=="slash") end
     Print("Key abandoned (" .. (reason or "left instance") .. "). Time not saved.")
     run = nil
     DB().currentRun = nil
@@ -238,6 +250,7 @@ function ns.CompleteRun(bossName, source)
     run.sec = sec
     run.chest = chest
     run.boss = bossName
+    if ns.History then ns.History.Archive(run,"completed",source=="manual") end
     Persist()
 
     local elapsedStr = ns.FormatTime(sec)
@@ -321,6 +334,7 @@ local function ResumeIfNeeded()
         killSeen = saved.killSeen or {},
         killCredit = saved.killCredit or {},
     }
+    if ns.History then ns.History.Resume(run,saved.history) end
     Persist()
     if ns.UI then ns.UI.Show() end
     Print("Resumed key for " .. dungeon.name .. " at " .. ns.FormatTime(elapsedUnix) .. ".")
@@ -342,6 +356,7 @@ function ns.CheckZone(reason)
                 end
                 return
             end
+            if run and run.active and ns.History then ns.History.Archive(run,"abandoned",false) end
             run = nil
             DB().currentRun = nil
             ns.StartRun(dungeon, reason)
@@ -479,12 +494,17 @@ f:RegisterEvent("PLAYER_LOGIN")
 f:RegisterEvent("PLAYER_ENTERING_WORLD")
 f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 f:RegisterEvent("PLAYER_DEAD")
+f:RegisterEvent("PLAYER_ALIVE")
+f:RegisterEvent("PLAYER_UNGHOST")
 f:RegisterEvent("ENCOUNTER_END")
 f:RegisterEvent("BOSS_KILL")
 f:RegisterEvent("PLAYER_TARGET_CHANGED")
 f:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
 f:RegisterEvent("GROUP_ROSTER_UPDATE")
 f:RegisterEvent("PLAYER_REGEN_ENABLED")
+f:RegisterEvent("UNIT_HEALTH")
+f:RegisterEvent("UNIT_FLAGS")
+f:RegisterEvent("UNIT_PET")
 pcall(function() f:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED") end)
 pcall(function() f:RegisterEvent("ENCOUNTER_START") end)
 
@@ -499,6 +519,7 @@ f:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         if ns.UI then ns.UI.Init() end
         if ns.Comm then ns.Comm.Init() end
+        if ns.Sync then ns.Sync.Init() end
         return
     end
 
@@ -507,15 +528,32 @@ f:SetScript("OnEvent", function(_, event, ...)
             ResumeIfNeeded()
             ns.CheckZone(event)
             if ns.Comm then ns.Comm.OnZone() end
+            if ns.Sync then ns.Sync.OnZone() end
         end)
         return
     end
 
     if event == "PLAYER_DEAD" then
         if run and run.active and not run.complete then
-            run.deaths = (run.deaths or 0) + 1
+            if ns.History and run.history then ns.History.Death(run,Read(UnitGUID,"player"),true)
+            else run.deaths = (run.deaths or 0) + 1 end
             if DB().currentRun then DB().currentRun.deaths = run.deaths end
         end
+        return
+    end
+
+    if event == "UNIT_HEALTH" or event == "UNIT_FLAGS" then
+        local unit = ...
+        -- Never query alive state from a death event: the unit API may still be stale.
+        if not Secret(unit) and type(unit) == "string" and (unit == "player" or unit:match("^party[1-4]$"))
+            and Read(UnitExists,unit) == true and Read(UnitIsDeadOrGhost,unit) == false then
+            if ns.History then ns.History.Alive(run,Read(UnitGUID,unit)) end
+        end
+        return
+    end
+
+    if event == "PLAYER_ALIVE" or event == "PLAYER_UNGHOST" then
+        if ns.History then ns.History.Alive(run,Read(UnitGUID,"player"),true) end
         return
     end
 
@@ -538,13 +576,26 @@ f:SetScript("OnEvent", function(_, event, ...)
         return
     end
 
+    if event == "UNIT_PET" then
+        if ns.History then ns.History.Roster(run,true); Persist() end
+        return
+    end
+
     if event == "GROUP_ROSTER_UPDATE" then
+        if ns.History then ns.History.Roster(run); Persist() end
         if ns.Comm then ns.Comm.OnRoster() end
+        if ns.Sync then ns.Sync.OnRoster() end
         return
     end
 
     if event == "COMBAT_LOG_EVENT_UNFILTERED" then
-        local ok, timestamp, subevent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags = pcall(CombatLogGetCurrentEventInfo)
+        local result = {pcall(CombatLogGetCurrentEventInfo)}
+        local ok = table.remove(result,1)
+        if ns.History and run and run.history then
+            if ok then ns.History.Observe(run,result) else run.history.coverage="partial" end
+            Persist()
+        end
+        local timestamp, subevent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags = unpack(result)
         if not ok or Secret(subevent) or Secret(sourceFlags) or Secret(destFlags) then return end
         if run and run.active and not run.practice and NpcIdFromGUID(destGUID) and type(sourceFlags) == "number" and type(destFlags) == "number" and bit and bit.band then
             local group = bit.band(sourceFlags, 7) ~= 0
@@ -620,6 +671,7 @@ SlashCmdList.FOREVERPLUS = function(msg)
             run = nil; DB().currentRun = nil
             ns.StartRun(dungeon, "reset")
         elseif run and run.active then
+            if ns.History then ns.History.Archive(run,"reset",true) end
             run.startGetTime = GetTime()
             run.startUnix = Now()
             run.deaths = 0
@@ -628,6 +680,7 @@ SlashCmdList.FOREVERPLUS = function(msg)
             run.bossDown = {}
             run.killSeen = {}
             run.killCredit = {}
+            if ns.History then ns.History.Start(run) end
             Persist()
             Print("Timer reset to 1:00:00. Bosses and forces cleared.")
         else
@@ -661,6 +714,10 @@ SlashCmdList.FOREVERPLUS = function(msg)
         if n == 0 then Print("  none yet") end
         return
     end
+    if msg == "sync" then
+        if ns.Sync then ns.Sync.Request("manual") end
+        return
+    end
     if msg == "share" then
         if ns.Comm then ns.Comm.ShareNow("manual") end
         return
@@ -671,7 +728,7 @@ SlashCmdList.FOREVERPLUS = function(msg)
     end
     if msg == "help" then
         Print("/fplus — open best-times board")
-        Print("/fplus lock | reset | complete | abandon | times | share | demo")
+        Print("/fplus lock | reset | complete | abandon | times | share | sync | demo")
         return
     end
     Print("Unknown command. /fplus help")
