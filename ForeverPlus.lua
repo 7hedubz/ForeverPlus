@@ -3,7 +3,7 @@ local ADDON, ns = ...
 ForeverPlusDB = ForeverPlusDB or {}
 
 ns.addon = ADDON
-ns.ver = "1.4.0"
+ns.ver = "1.4.1"
 
 local LIMIT = ns.LIMIT
 local Secret = ns.IsSecret
@@ -69,6 +69,8 @@ local validatedDB
 local function DB()
     if Secret(ForeverPlusDB) or type(ForeverPlusDB) ~= "table" then ForeverPlusDB = {} end
     local d = ForeverPlusDB
+    if Secret(d.enabled) or type(d.enabled) ~= "boolean" then d.enabled = true end
+    if not d.enabled then d.currentRun = nil end
     if validatedDB == d then return d end
     for _,key in ipairs({"best", "peers", "pos", "minimap"}) do
         if Secret(d[key]) or type(d[key]) ~= "table" then d[key] = {} end
@@ -123,6 +125,9 @@ local function DB()
     return d
 end
 ns.DB = DB
+function ns.IsEnabled()
+    return DB().enabled
+end
 
 local run -- current timed run
 local pendingReports = {}
@@ -153,6 +158,7 @@ local function InitForces(r, saved)
     RecomputeForces(r)
 end
 local function ActivePartyRun()
+    if not ns.IsEnabled() then return false end
     if not run or not run.active or run.complete or run.practice then return false end
     local inst = ns.SafeInstance()
     if not inst or inst.instanceType ~= "party" then return false end
@@ -189,6 +195,7 @@ local function ExcludeBoss(boss, name, source, encounterID)
     RecomputeForces(run)
 end
 local function Persist()
+    if not ns.IsEnabled() then return end
     if not run or run.practice then return end
     DB().currentRun = {
         key=run.key, name=run.name, instanceID=run.instanceID,
@@ -277,6 +284,7 @@ end
 local SafeInstance = ns.SafeInstance
 
 function ns.StartRun(dungeon, reason)
+    if not ns.IsEnabled() then return end
     if not dungeon then return end
     ResumeIfNeeded()
     -- Only an explicit end/reset may replace an ongoing real run.
@@ -318,13 +326,14 @@ function ns.StartRun(dungeon, reason)
 end
 
 function ns.AbandonRun(reason)
+    if not ns.IsEnabled() then return end
     ResumeIfNeeded()
     if run and run.practice then
         run = nil
         if ns.UI then ns.UI.HideNow() end
         return -- practice never owns the saved real-session marker
     end
-    if reason ~= "slash" and reason ~= "vote" then return end
+    if reason ~= "slash" and reason ~= "vote" and reason ~= "disabled" then return end
     pendingReports = {}
     if run and run.complete and not run.practice then
         if ns.UI then ns.UI.HideSoon() end
@@ -347,6 +356,7 @@ function ns.AbandonRun(reason)
 end
 
 function ns.CompleteRun(bossName, source)
+    if not ns.IsEnabled() then return end
     if not run or not run.active or run.complete then
         return
     end
@@ -404,6 +414,7 @@ function ns.CompleteRun(bossName, source)
 end
 
 ResumeIfNeeded = function()
+    if not ns.IsEnabled() then return end
     if run then return end
     local saved = DB().currentRun
     if not saved then return end
@@ -459,6 +470,7 @@ ResumeIfNeeded = function()
 end
 
 function ns.CheckZone(reason)
+    if not ns.IsEnabled() then return end
     ResumeIfNeeded()
     local inst = SafeInstance()
     if not inst then return end
@@ -502,6 +514,29 @@ function ns.CheckZone(reason)
             run = nil
         end
     end
+end
+
+-- Disable is an explicit local abandonment, not a native group vote.
+function ns.SetEnabled(enabled)
+    if Secret(enabled) or type(enabled) ~= "boolean" then return nil end
+    local d = DB()
+    if d.enabled == enabled then return enabled end
+    if not enabled then
+        ns.AbandonRun("disabled") -- archive while tracking is still enabled
+        run, d.currentRun, pendingReports = nil, nil, {}
+        d.enabled = false
+        if ns.Vote and type(ns.Vote.Get) == "function" then ns.Vote.Get() end
+        if ns.UI then ns.UI.HideNow() end
+    else
+        run, d.currentRun, pendingReports = nil, nil, {}
+        d.enabled, d.abandonedRun = true, nil
+        ns.CheckZone("enabled")
+    end
+    if ns.UI and ns.UI.RefreshTracking then ns.UI.RefreshTracking() end
+    return enabled
+end
+function ns.ToggleEnabled()
+    return ns.SetEnabled(not ns.IsEnabled())
 end
 
 local function NpcIdFromGUID(guid)
@@ -560,6 +595,7 @@ local function ReportParty()
     return channel .. ":" .. table.concat(names,";"),channel
 end
 local function PruneReports()
+    if not ns.IsEnabled() then pendingReports = {}; return end
     if #pendingReports == 0 then return end
     local fingerprint = ReportParty()
     for i=#pendingReports,1,-1 do
@@ -647,6 +683,7 @@ function ns.SendPendingBossReport()
 end
 
 function ns.OnCreatureDead(guid, npcId, name, source, encounterID)
+    if not ns.IsEnabled() then return end
     if not run or not run.active or run.complete then
         return
     end
@@ -843,6 +880,8 @@ f:SetScript("OnEvent", function(_, event, ...)
         return
     end
 
+    if not ns.IsEnabled() then return end
+
     if event == "PLAYER_DEAD" then
         if run and run.active and not run.complete then
             if ns.History and run.history then ns.History.UnitDeath(run,"player")
@@ -961,6 +1000,11 @@ end)
 -- Smooth timer; also re-scan boss frames in case combat log is locked down.
 local partyScanAt = 0
 C_Timer.NewTicker(0.1, function()
+    if not ns.IsEnabled() then
+        pendingReports = {}
+        RefreshHUD()
+        return
+    end
     if run and run.active and not run.complete then
         if ns.History and GetTime() >= partyScanAt then
             partyScanAt = GetTime() + 0.5
@@ -976,6 +1020,7 @@ C_Timer.NewTicker(0.1, function()
 end)
 
 function ns.ToggleDemo()
+    if not ns.IsEnabled() then return end
     ResumeIfNeeded()
     if run and run.practice then
         run = nil
@@ -1011,7 +1056,12 @@ SLASH_FOREVERPLUS2 = "/foreverplus"
 SLASH_FOREVERPLUS3 = "/mythicplus"
 SlashCmdList.FOREVERPLUS = function(msg)
     msg = (msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
-    if msg == "" or msg == "toggle" then
+    if msg == "toggle" then ns.ToggleEnabled(); return end
+    if msg == "on" then ns.SetEnabled(true); return end
+    if msg == "off" then ns.SetEnabled(false); return end
+    if not ns.IsEnabled() and (msg == "reset" or msg == "complete" or msg == "done"
+        or msg == "abandon" or msg == "report" or msg == "demo") then return end
+    if msg == "" then
         if ns.UI then ns.UI.ToggleBoard() end
         return
     end
@@ -1152,6 +1202,7 @@ SlashCmdList.FOREVERPLUS = function(msg)
     end
     if msg == "help" then
         Print("/fplus — open dungeon journal")
+        Print("/fplus toggle | on | off — tracking ON/OFF (OFF abandons active runs)")
         Print("/fplus lock | reset | complete | abandon | report | times | share | sync | demo | debug")
         return
     end

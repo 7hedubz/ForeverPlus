@@ -1,8 +1,8 @@
-ForeverPlus 1.4.0 — WoW Forever dungeon timer and run journal
+ForeverPlus 1.4.1 — WoW Forever dungeon timer and run journal
 ============================================================
 Author: DoHeal. Interface16001 / Camelot.
 Install in _forever_/Interface/AddOns/ForeverPlus.
-From 1.1.0-1.3.1: /reload. New install or upgrade from before1.1.0: relaunch.
+From 1.1.0-1.4.0: /reload. New install or upgrade from before1.1.0: relaunch.
 
 DUNGEON JOURNAL
 /fplus opens dungeon -> individual run -> roster, damage/healing, deaths.
@@ -114,6 +114,15 @@ receive earlier recorded runs they participated in. Both online, outside
 instances, grouped or in the same guild, using a compatible addon version.
 Only recorded participants import/display the run; transport is not encrypted.
 Shared stats remain unverified observations. Personal bests stay separate.
+
+FARMING TOGGLE
+Right-click minimap -> Tracking: ON/OFF. Setting persists after reload/login.
+Off prevents tracking/recording/new attempts/public boss reports and hides the
+HUD, but leaves the minimap and journal available. Existing history/PBs remain.
+Disabling an active real attempt archives it once as ABANDONED, never a clear
+or PB. Re-enabling inside a supported dungeon starts fresh; outside it waits
+for entry. It does not pause/resume an old attempt or count farming while off.
+/fplus on, /fplus off, /fplus toggle also control the saved state.
 
 COMMANDS
 /fplus                 dungeon journal

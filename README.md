@@ -1,10 +1,10 @@
 # ForeverPlus
 
-Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.4.0**, Interface `16001` (Camelot).
+Dungeon timer and run journal for **World of Warcraft: Forever**. Version **1.4.1**, Interface `16001` (Camelot).
 
 ## Install / upgrade
 
-Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.3.1 to 1.4.0** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
+Put the `ForeverPlus` folder directly in `World of Warcraft/_forever_/Interface/AddOns`. Upgrading from **1.1.0–1.4.0 to 1.4.1** only needs `/reload`. New installs or upgrades from before 1.1.0 need a full quit and relaunch to load the history/sync files. Existing personal bests and settings are preserved.
 
 ## Dungeon journal
 
@@ -100,6 +100,12 @@ Reports are bounded, session-only snapshots, not a timer-driven sender queue. Du
 Thrown/explicitly rejected sends remain for a **manual** retry; leaving combat only re-enables the button, never sends. A normal void return consumes one attempted line but does **not** prove delivery. `/fplus debug` reports cumulative attempt/error counters and the last status, with delivery explicitly unverified; the HUD button shows the pending count. Check the actual party/instance chat after clicking. No cross-client announcer election or hidden-API bypass is claimed.
 
 The forbidden CLEU registration remains removed. Optional legacy-parser tests are synthetic and do not imply live damage/healing availability. Run `/fplus debug` after a party kill to see the native-event ledger and boss deductions; target details are optional diagnostics, not a gameplay requirement.
+
+## Farming / tracking toggle
+
+Right-click the minimap icon and click **Tracking: ON/OFF**. The saved setting defaults on and survives reload/login. Off prevents automatic dungeon attempts, kill/boss/death/native-stat collection, practice starts, resets, completion and public boss-report sends; it hides the timer while keeping the minimap icon and journal available. Existing records, personal bests, and settings are not deleted, and historical synchronization remains available.
+
+Disabling during an active real attempt explicitly archives it **once as abandoned**, never as a completion/PB, and clears its live/report state. It is not a timer-pause exploit or a hidden background farming attempt. Re-enabling inside a supported dungeon begins a fresh attempt; outside, it waits for the next supported dungeon. It never revives the abandoned attempt. Commands: `/fplus on`, `/fplus off`, `/fplus toggle`.
 
 ## Commands and minimap
 

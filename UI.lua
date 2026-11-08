@@ -10,6 +10,9 @@ local CHEST = media .. "chest"
 
 local frame, board, minimap
 local hideAt = 0
+local function TrackingEnabled()
+    return not ns.IsEnabled or ns.IsEnabled()
+end
 
 local function DB()
     return ns.DB()
@@ -297,6 +300,7 @@ end
 -- This panel is independent of HUD visibility, so incoming votes remain visible.
 local dismissedVote
 function UI.RequestAbandon()
+    if not TrackingEnabled() then return end
     local r = ns.GetRun()
     if not r or not r.active or r.complete or r.practice then return end
     dismissedVote = nil
@@ -602,11 +606,17 @@ function UI.ToggleBoard()
     else UI.RefreshBoard(); board:Show() end
 end
 
+function UI.RefreshTracking()
+    if UI.minimapMenu and UI.minimapMenu.trackingButton then
+        UI.minimapMenu.trackingButton:SetText(TrackingEnabled() and "Tracking: ON" or "Tracking: OFF")
+    end
+end
+
 function UI.ToggleMinimapMenu(anchor)
     local menu = UI.minimapMenu
     if not menu then
         menu = CreateFrame("Frame", "ForeverPlusMinimapMenu", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
-        menu:SetSize(190, 202)
+        menu:SetSize(190, 232)
         menu:SetFrameStrata("TOOLTIP")
         menu:SetClampedToScreen(true)
         MakeBackdrop(menu, 0.03, 0.03, 0.06, 0.99)
@@ -618,18 +628,24 @@ function UI.ToggleMinimapMenu(anchor)
             button:SetScript("OnClick", function() menu:Hide(); fn() end)
             return button
         end
-        item("Dungeon history", 1, function() if not board:IsShown() then UI.ToggleBoard() end end)
-        menu.syncButton = item("Sync runs", 2, SyncRuns)
-        menu.lockButton = item("Lock / unlock timer", 3, function() DB().locked = not DB().locked end)
-        menu.abandonButton = item("Abandon run...", 4, function() UI.RequestAbandon() end)
-        menu.reportButton = item("Send boss report", 5, function()
+        menu.trackingButton = item("Tracking: ON", 1, function()
+            if ns.ToggleEnabled then ns.ToggleEnabled() end
+            UI.RefreshTracking()
+            if not TrackingEnabled() then UI.HideNow() end
+        end)
+        item("Dungeon history", 2, function() if not board:IsShown() then UI.ToggleBoard() end end)
+        menu.syncButton = item("Sync runs", 3, SyncRuns)
+        menu.lockButton = item("Lock / unlock timer", 4, function() DB().locked = not DB().locked end)
+        menu.abandonButton = item("Abandon run...", 5, function() UI.RequestAbandon() end)
+        menu.reportButton = item("Send boss report", 6, function()
             if ns.SendPendingBossReport then ns.SendPendingBossReport() end
             UI.RefreshBossReport()
         end)
-        item("Close", 6, function() end)
+        item("Close", 7, function() end)
         menu:Hide()
         UI.minimapMenu = menu
     end
+    UI.RefreshTracking()
     if menu:IsShown() then menu:Hide(); return end
     menu:ClearAllPoints()
     menu:SetPoint("TOPRIGHT", anchor or minimap or UIParent, "BOTTOMRIGHT", 0, -2)
@@ -666,12 +682,15 @@ function UI.BuildMinimap()
         if button == "RightButton" then
             UI.ToggleMinimapMenu(self)
         else
+            if not TrackingEnabled() then UI.HideNow(); UI.ToggleBoard(); return end
             if frame:IsShown() then frame:Hide() else UI.Show() end
         end
     end)
     btn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:AddLine("ForeverPlus", 1, 0.82, 0.2)
+        GameTooltip:AddLine(TrackingEnabled() and "Tracking: ON" or "Tracking: OFF — no automatic runs.", 1, 1, 1)
+        GameTooltip:AddLine("OFF abandons the active attempt; history and sync remain available.", 0.7, 0.7, 0.7, true)
         GameTooltip:AddLine("Left-click: timer  Right-click: history / sync menu", 1, 1, 1)
         GameTooltip:Show()
     end)
@@ -690,6 +709,7 @@ function UI.PlaceMinimap()
 end
 
 function UI.Show()
+    if not TrackingEnabled() then UI.HideNow(); return end
     if not frame then UI.Init() end
     hideAt = 0
     frame:Show()
@@ -781,6 +801,7 @@ local function RefreshHUD()
 end
 
 function UI.Tick()
+    if not TrackingEnabled() then UI.HideNow() end
     RefreshStage("hud", RefreshHUD)
     RefreshStage("report-ui", UI.RefreshBossReport)
     RefreshStage("vote-ui", UI.RefreshVote)

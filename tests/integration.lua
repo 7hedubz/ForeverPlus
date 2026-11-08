@@ -319,3 +319,48 @@ assert(not ns.GetRun() or not ns.GetRun().active,'abandon silently restarted ins
 local abandoned=ns.History.List('rfc')
 assert(#abandoned==2 and abandoned[1].status=='abandoned','abandoned run not archived exactly once')
 print('PASS real death/release/resurrection/outside reload/wrong dungeon/reentry preservation and confirmed abandon')
+-- Real TOC + physical minimap callback: archive, cancel confirmation, and freeze.
+SlashCmdList.FOREVERPLUS('reset');local tracked=ns.GetRun()
+fire('PARTY_KILL','opaque-attacker','opaque-target');fire('BOSS_KILL',0,'Taragaman the Hungerer')
+IsInGroup=function(category) return category==nil end
+-- Queue a real boss report after restoring party context.
+fire('BOSS_KILL',0,'Jergosh the Invoker');assert(ns.GetPendingBossReport())
+IsInGroup=function() return false end
+advance(6);ns.Vote.Request();assert(ns.Vote.Get().phase=='confirm')
+local countBefore=#ns.History.List('rfc');local pb=ns.GetBest('rfc').sec
+ForeverPlusMinimapButton.scripts.OnClick(ForeverPlusMinimapButton,'RightButton')
+ForeverPlusMinimapMenu.trackingButton.scripts.OnClick()
+assert(ForeverPlusDB.enabled==false and ns.GetRun()==nil)
+assert(ForeverPlusMinimapMenu.trackingButton.text=='Tracking: OFF')
+assert(ns.Vote.Get().phase=='cancelled','OFF failed to invalidate pending confirmation')
+assert(ns.GetPendingBossReport()==nil and ns.SendPendingBossReport()==false)
+local offHistory=ns.History.List('rfc');assert(#offHistory==countBefore+1 and offHistory[1].status=='abandoned' and offHistory[1].manual)
+assert(ns.GetBest('rfc').sec==pb,'OFF changed PB')
+local kills,deaths=tracked.kills,ns.History.TotalDeaths(tracked)
+local polls=0;local nativePoll=ns.History.PollNative
+ns.History.PollNative=function(...) polls=polls+1;return nativePoll(...) end
+for i=1,3 do
+ fire('PARTY_KILL','opaque-attacker','opaque-target');fire('PLAYER_DEAD');fire('UNIT_HEALTH','party1')
+ fire('BOSS_KILL',0,'Bazzalan');emit('SPELL_DAMAGE','Creature-0-0-0-0-999-off','Trash')
+ fire('ZONE_CHANGED_NEW_AREA');advance(2)
+end
+assert(polls==0 and tracked.kills==kills and ns.History.TotalDeaths(tracked)==deaths,'OFF mutated death/meter/force state')
+for _,cmd in ipairs({'reset','complete','abandon','demo','report'}) do SlashCmdList.FOREVERPLUS(cmd) end
+assert(ns.GetRun()==nil and #ns.History.List('rfc')==countBefore+1)
+ForeverPlusMinimapButton.scripts.OnClick(ForeverPlusMinimapButton,'LeftButton')
+assert(not ForeverPlusFrame:IsShown() and ForeverPlusMinimapButton:IsShown())
+ForeverPlusBoard:Hide();SlashCmdList.FOREVERPLUS('');assert(ForeverPlusBoard:IsShown())
+-- Interrupted disable saves must be discarded, not revived or newly archived.
+ForeverPlusDB.currentRun={key='rfc',startUnix=time()-50,kills=42}
+frames,timers,tickers={},{},{};ns=loadAddon();fire('PLAYER_ENTERING_WORLD');advance(2)
+assert(not ns.IsEnabled() and ns.GetRun()==nil and ForeverPlusDB.currentRun==nil)
+assert(#ns.History.List('rfc')==countBefore+1)
+ForeverPlusMinimapButton.scripts.OnClick(ForeverPlusMinimapButton,'RightButton')
+assert(ForeverPlusMinimapMenu.trackingButton.text=='Tracking: OFF')
+ForeverPlusMinimapMenu.trackingButton.scripts.OnClick()
+local fresh=assert(ns.GetRun());assert(ns.IsEnabled() and fresh.active and fresh.kills==0 and fresh.deaths==0 and fresh.history.id~=tracked.history.id)
+assert(ForeverPlusMinimapMenu.trackingButton.text=='Tracking: ON')
+local completedBefore=#ns.History.List('rfc');ns.CompleteRun('manual','manual');local completedCount=#ns.History.List('rfc')
+assert(completedCount==completedBefore+1);SlashCmdList.FOREVERPLUS('off');assert(#ns.History.List('rfc')==completedCount)
+SlashCmdList.FOREVERPLUS('on');assert(ns.GetRun().active and not ns.GetRun().complete,'ON revived completed sentinel')
+print('PASS actual TOC minimap ON/OFF clicks, abandonment once, pending report/vote cancellation, OFF event/meter freeze, journal and reload recovery')

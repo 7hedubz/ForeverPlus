@@ -48,6 +48,36 @@ local function boot(db)
  return s,ns
 end
 local function test(name,fn) tests[#tests+1]={name,fn} end
+test('tracking defaults on and sanitizes malformed flags without losing false',function()
+ local s,n=boot();eq(n.IsEnabled(),true);eq(n.DB().enabled,true)
+ for _,v in ipairs({false,true,'false',0,{},secret}) do
+  s,n=boot({enabled=v});eq(n.IsEnabled(),v~=false);eq(type(n.DB().enabled),'boolean')
+ end
+ n.DB().enabled='bad';eq(n.IsEnabled(),true)
+end)
+test('disable archives once before turning off and enabling creates a fresh attempt',function()
+ local s,n=boot();local archives={};local reads=0
+ n.History={Start=function() end,Archive=function(r,status,manual) eq(n.IsEnabled(),true);archives[#archives+1]={r,status,manual} end,
+  UnitState=function() reads=reads+1 end,PollNative=function() reads=reads+1 end,Roster=function() reads=reads+1 end}
+ local r=n.StartRun(n.DUNGEONS.rfc);s:kill(1)
+ eq(n.SetEnabled(false),false);eq(n.IsEnabled(),false);eq(#archives,1);eq(archives[1][2],'abandoned');eq(archives[1][3],true)
+ eq(n.GetRun(),nil);eq(n.DB().currentRun,nil);eq(n.GetBest('rfc'),nil)
+ n.SetEnabled(false);n.CheckZone();s:entry();s.tick();s:kill(2)
+ for _,event in ipairs({'PLAYER_DEAD','UNIT_HEALTH','UNIT_FLAGS','PLAYER_ALIVE','PLAYER_UNGHOST','UNIT_PET','GROUP_ROSTER_UPDATE','BOSS_KILL','ENCOUNTER_END'}) do s.event(nil,event,'player') end
+ s:emit('SPELL_DAMAGE','Creature-0-0-0-0-999-1','Trash');n.OnCreatureDead(nil,11520,'Taragaman the Hungerer','BOSS_KILL')
+ n.StartRun(n.DUNGEONS.rfc);n.ToggleDemo();n.CompleteRun('manual');n.AbandonRun('slash')
+ local requests=0;n.Vote={Request=function() requests=requests+1 end}
+ for _,cmd in ipairs({'reset','complete','abandon','report','demo'}) do SlashCmdList.FOREVERPLUS(cmd) end
+ eq(requests,0);eq(reads,0);eq(#archives,1);eq(n.GetRun(),nil);eq(r.kills,1)
+ eq(n.ToggleEnabled(),true);local fresh=n.GetRun();assert(fresh and fresh~=r);eq(fresh.kills,0);eq(fresh.deaths,0);assert(fresh.attemptGeneration>r.attemptGeneration)
+ eq(n.SetEnabled('false'),nil);eq(n.IsEnabled(),true)
+end)
+test('disabled reload clears interrupted saved run without archiving or resuming',function()
+ local s,n=boot({enabled=false,currentRun={key='rfc',startUnix=99900,kills=30}})
+ local archives=0;n.History={Start=function() end,Archive=function() archives=archives+1 end}
+ s:entry();s.tick();eq(n.GetRun(),nil);eq(n.DB().currentRun,nil);eq(archives,0)
+ s.kind='none';n.SetEnabled(true);eq(n.GetRun(),nil);s.kind='party';n.CheckZone();assert(n.GetRun().active)
+end)
 test('next better chest uses inclusive cutoffs and positive ceiling gaps',function()
  local _,n=boot()
  for _,case in ipairs({
@@ -562,11 +592,24 @@ test('completed report survives same-party zoning but explicit abandon still cle
  eq(n.GetPendingBossReport().id,id);eq(n.SendPendingBossReport(),true);eq(calls,1)
  s.kind='party';n.CheckZone();boss(s);n.CompleteRun('manual');n.AbandonRun('slash');eq(n.GetPendingBossReport(),nil)
 end)
-test('pending readiness includes available API and release version is 1.4.0',function()
+test('disable clears prepared reports and never archives practice or completed twice',function()
+ local s,n=boot();reportParty(s);n.StartRun(n.DUNGEONS.rfc);boss(s);assert(n.GetPendingBossReport())
+ local sends=0;SendChatMessage=function() sends=sends+1 end
+ n.SetEnabled(false);eq(n.GetPendingBossReport(),nil);eq(n.SendPendingBossReport(),false);eq(sends,0)
+ for _,mode in ipairs({'practice','completed','abandoned'}) do
+  s,n=boot();local archives=0
+  n.History={Start=function() end,Archive=function() archives=archives+1 end}
+  if mode=='practice' then n.ToggleDemo() else n.StartRun(n.DUNGEONS.rfc) end
+  if mode=='completed' then n.CompleteRun('manual') elseif mode=='abandoned' then n.AbandonRun('slash') end
+  local count=archives;n.SetEnabled(false);n.SetEnabled(false)
+  eq(archives,count);eq(n.GetRun(),nil);eq(n.DB().currentRun,nil)
+ end
+end)
+test('pending readiness includes available API and release version is 1.4.1',function()
  local s,n=boot();reportParty(s);n.StartRun(n.DUNGEONS.rfc);boss(s)
  eq(n.GetPendingBossReport().canSend,false);eq(n.SendPendingBossReport(),false);assert(n.GetPendingBossReport())
  C_ChatInfo={SendChatMessage=function() end};eq(n.GetPendingBossReport().canSend,true)
- eq(n.SendPendingBossReport(),true);eq(n.ver,'1.4.0')
+ eq(n.SendPendingBossReport(),true);eq(n.ver,'1.4.1')
 end)
 test('known party categories route frozen lines and secret category preparation fails closed',function()
  for _,mode in ipairs({'constant','enum','absent','secret','secretMembership'}) do

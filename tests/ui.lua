@@ -254,3 +254,28 @@ assert(ForeverPlusBoard.totals.text:find('— deaths',1,true))
 records[1].players[1].deathsKnown=true;ns.UI.RefreshBoard()
 assert(ForeverPlusBoard.playerLines[1].deaths.text=='0','verified zero deaths were hidden')
 print('PASS unknown zero deaths differ from a verified living/death baseline')
+-- Reuse the real menu callbacks; OFF never removes the way back in.
+local enabled=true
+ns.IsEnabled=function() return enabled end
+ns.ToggleEnabled=function() enabled=not enabled;return enabled end
+ns.UI.ToggleMinimapMenu(ForeverPlusMinimapButton)
+if not ForeverPlusMinimapMenu:IsShown() then ns.UI.ToggleMinimapMenu(ForeverPlusMinimapButton) end
+assert(ForeverPlusMinimapMenu.trackingButton,'missing tracking toggle')
+assert(ForeverPlusMinimapMenu.trackingButton.text=='Tracking: ON')
+assert(ForeverPlusMinimapMenu.height>=232,'tracking row overlaps menu actions')
+ForeverPlusMinimapMenu.trackingButton.scripts.OnClick()
+assert(not enabled and ForeverPlusMinimapMenu.trackingButton.text=='Tracking: OFF')
+ForeverPlusMinimapButton.scripts.OnClick(nil,'LeftButton')
+assert(not ForeverPlusFrame:IsShown(),'OFF left click exposed stale timer')
+assert(ForeverPlusMinimapButton:IsShown(),'OFF hid minimap reenable action')
+ns.UI.Show();ns.UI.Tick();assert(not ForeverPlusFrame:IsShown(),'OFF Show/Tick resurrected HUD')
+ForeverPlusBoard:Hide();ns.UI.ToggleBoard();assert(ForeverPlusBoard:IsShown(),'OFF journal unavailable')
+ns.UI.Tick();assert(ForeverPlusBoard.syncStatus.text==syncStatus,'OFF stopped history status refresh')
+local tips={};methods.AddLine=function(_,text) tips[#tips+1]=text end
+ForeverPlusMinimapButton.scripts.OnEnter(ForeverPlusMinimapButton)
+assert(table.concat(tips,' '):find('no automatic runs',1,true),'OFF tooltip does not explain tracking')
+ForeverPlusMinimapButton.scripts.OnClick(nil,'RightButton')
+assert(ForeverPlusMinimapMenu.trackingButton.text=='Tracking: OFF')
+ForeverPlusMinimapMenu.trackingButton.scripts.OnClick()
+assert(enabled and ForeverPlusMinimapMenu.trackingButton.text=='Tracking: ON')
+print('PASS saved tracking menu refresh, OFF HUD guards, journal/minimap availability and tooltip')
